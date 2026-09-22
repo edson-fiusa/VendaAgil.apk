@@ -1,0 +1,1833 @@
+import React, { useEffect, useState } from 'react';
+
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+
+import { SafeAreaView } from 'react-native-safe-area-context';
+
+import {
+  inicializarBanco,
+  obterBanco,
+} from '../../src/database/banco';
+
+import { verificarSenhaMestre } from '../../src/utils/seguranca';
+
+import { criarTabelaConfiguracoesPagamento } from '../../src/pagamentos/bancoPagamento';
+
+import Avarias from './avarias';
+import CadastroProduto from './cadastro-produto';
+import Caixa from './caixa';
+import GerenciarOperadores from './gerenciar-operadores';
+import GerenciarProdutos from './gerenciar-produtos';
+import IA from './ia';
+import Relatorios from './relatorios';
+import Backup from './backup';
+import TrocarSenha from './trocar-senha';
+import LogAtividades from './log_atividades';
+import ConfiguracaoPagamento from '../pagamentos/configuracao-pagamento';
+
+import { registrarLog } from '../../src/utils/log';
+
+// ============================================================
+// INTERFACES
+// ============================================================
+
+interface Operador {
+  id: number;
+  nome: string;
+  usuario?: string;
+}
+
+interface CaixaEstado {
+  id: number;
+  caixaId: number;
+  operadorId: number;
+  operadorNome: string;
+  saldoInicial: number;
+  total: number;
+  fechado: boolean;
+}
+
+type Tela = 'login' | 'admin' | 'caixa';
+
+type TelaLogin = 'escolha' | 'admin' | 'caixa';
+
+type TelaAdmin =
+  | 'menu'
+  | 'cadastroProduto'
+  | 'gerenciarProdutos'
+  | 'gerenciarOperadores'
+  | 'avarias'
+  | 'relatorios'
+  | 'ia'
+  | 'backup'
+  | 'trocarSenha'
+  | 'logAtividades'
+  | 'configuracaoPagamento';
+
+// ============================================================
+// COMPONENTE PRINCIPAL
+// ============================================================
+
+export default function Index() {
+  const [tela, setTela] = useState<Tela>('login');
+
+  const [telaLogin, setTelaLogin] =
+    useState<TelaLogin>('escolha');
+
+  const [telaAdmin, setTelaAdmin] =
+    useState<TelaAdmin>('menu');
+
+  // ============================================================
+  // BANCO LOCAL
+  // ============================================================
+
+  const [bancoPronto, setBancoPronto] =
+    useState(false);
+
+  const [erroBanco, setErroBanco] =
+    useState<string | null>(null);
+
+  // ============================================================
+  // INICIALIZAÇÃO DO BANCO
+  // ============================================================
+
+  useEffect(() => {
+    let ativo = true;
+
+    async function prepararBanco() {
+      try {
+        console.log(
+          'Inicializando banco SQLite local...'
+        );
+
+        await inicializarBanco();
+
+        // Tabela de configuração de pagamento (Mercado Pago)
+        await criarTabelaConfiguracoesPagamento();
+
+        if (ativo) {
+          setBancoPronto(true);
+          setErroBanco(null);
+        }
+
+        console.log(
+          'Banco SQLite local inicializado.'
+        );
+      } catch (error: any) {
+        console.error(
+          'Erro ao inicializar banco local:',
+          error
+        );
+
+        if (ativo) {
+          setBancoPronto(false);
+
+          setErroBanco(
+            error?.message ||
+              'Não foi possível inicializar o banco local.'
+          );
+        }
+      }
+    }
+
+    prepararBanco();
+
+    return () => {
+      ativo = false;
+    };
+  }, []);
+
+  // ============================================================
+  // TESTE / LICENÇA (30 DIAS)
+  // ============================================================
+
+  const DIAS_TESTE = 30;
+
+  const [verificandoTeste, setVerificandoTeste] =
+    useState(true);
+
+  const [testeExpirado, setTesteExpirado] =
+    useState(false);
+
+  const [appDesbloqueado, setAppDesbloqueado] =
+    useState(false);
+
+  const [diasRestantesTeste, setDiasRestantesTeste] =
+    useState(DIAS_TESTE);
+
+  const [mostrarBoasVindas, setMostrarBoasVindas] =
+    useState(false);
+
+  const [senhaDesbloqueio, setSenhaDesbloqueio] =
+    useState('');
+
+  const [verificandoSenha, setVerificandoSenha] =
+    useState(false);
+
+  async function obterConfig(
+    chave: string
+  ): Promise<string | null> {
+    const db = await obterBanco();
+
+    const linha = await db.getFirstAsync<{
+      valor: string | null;
+    }>(
+      `
+      SELECT valor
+      FROM configuracao_local
+      WHERE chave = ?
+      LIMIT 1
+      `,
+      chave
+    );
+
+    return linha?.valor ?? null;
+  }
+
+  async function salvarConfig(
+    chave: string,
+    valor: string
+  ): Promise<void> {
+    const db = await obterBanco();
+
+    const agora = new Date().toISOString();
+
+    await db.runAsync(
+      `
+      INSERT OR REPLACE INTO configuracao_local
+      (chave, valor, atualizado_em)
+      VALUES (?, ?, ?)
+      `,
+      chave,
+      valor,
+      agora
+    );
+  }
+
+  async function verificarPeriodoTeste() {
+    try {
+      // Se já foi desbloqueado com a senha em algum momento,
+      // libera direto, sem checar datas.
+      const ativado = await obterConfig('app_ativado');
+
+      if (ativado === '1') {
+        setAppDesbloqueado(true);
+        setTesteExpirado(false);
+        return;
+      }
+
+      let dataInstalacaoTexto =
+        await obterConfig('data_instalacao');
+
+      if (!dataInstalacaoTexto) {
+        dataInstalacaoTexto = new Date().toISOString();
+
+        await salvarConfig(
+          'data_instalacao',
+          dataInstalacaoTexto
+        );
+      }
+
+      const dataInstalacao = new Date(
+        dataInstalacaoTexto
+      ).getTime();
+
+      const agora = Date.now();
+
+      const diasPassados = Math.floor(
+        (agora - dataInstalacao) /
+          (1000 * 60 * 60 * 24)
+      );
+
+      const restantes = DIAS_TESTE - diasPassados;
+
+      if (restantes > 0) {
+        setDiasRestantesTeste(restantes);
+        setTesteExpirado(false);
+        setAppDesbloqueado(false);
+        setMostrarBoasVindas(true);
+      } else {
+        setDiasRestantesTeste(0);
+        setTesteExpirado(true);
+        setAppDesbloqueado(false);
+      }
+    } catch (error: any) {
+      console.error(
+        'Erro ao verificar período de teste:',
+        error
+      );
+
+      // Se der algum erro ao verificar (ex.: banco com problema),
+      // não travamos o uso do app por causa disso.
+      setAppDesbloqueado(true);
+      setTesteExpirado(false);
+    } finally {
+      setVerificandoTeste(false);
+    }
+  }
+
+  useEffect(() => {
+    if (bancoPronto) {
+      verificarPeriodoTeste();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bancoPronto]);
+
+  async function desbloquearComSenha() {
+    const digitado = senhaDesbloqueio.trim();
+
+    if (!digitado) {
+      Alert.alert(
+        'Atenção',
+        'Informe a senha de desbloqueio.'
+      );
+      return;
+    }
+
+    try {
+      setVerificandoSenha(true);
+
+      const correta = verificarSenhaMestre(digitado);
+
+      if (!correta) {
+        Alert.alert(
+          'Senha incorreta',
+          'A senha informada está incorreta.'
+        );
+        return;
+      }
+
+      await salvarConfig('app_ativado', '1');
+
+      setAppDesbloqueado(true);
+      setTesteExpirado(false);
+      setSenhaDesbloqueio('');
+    } catch (error: any) {
+      console.error(
+        'Erro ao desbloquear com senha:',
+        error
+      );
+
+      Alert.alert(
+        'Erro',
+        error?.message ||
+          'Não foi possível validar a senha agora.'
+      );
+    } finally {
+      setVerificandoSenha(false);
+    }
+  }
+
+  // ============================================================
+  // CREDENCIAIS
+  // ============================================================
+
+  const [usuario, setUsuario] =
+    useState('');
+
+  const [senha, setSenha] =
+    useState('');
+
+  const [operadorUsuario, setOperadorUsuario] =
+    useState('');
+
+  const [operadorSenha, setOperadorSenha] =
+    useState('');
+
+  // ============================================================
+  // ENTIDADES LOGADAS
+  // ============================================================
+
+  const [operador, setOperador] =
+    useState<Operador | null>(null);
+
+  const [caixa, setCaixa] =
+    useState<CaixaEstado | null>(null);
+
+  const [carregando, setCarregando] =
+    useState(false);
+
+  // ============================================================
+  // VERIFICAR BANCO
+  // ============================================================
+
+  function verificarBancoAntesDeEntrar() {
+    if (!bancoPronto) {
+      Alert.alert(
+        'Aguarde',
+        erroBanco ||
+          'O aplicativo ainda está preparando os dados locais.'
+      );
+
+      return false;
+    }
+
+    return true;
+  }
+
+  // ============================================================
+  // LOGIN ADMINISTRADOR LOCAL
+  // ============================================================
+  //
+  // As credenciais do admin ficam salvas na tabela
+  // configuracao_local (chaves "admin_usuario" e
+  // "admin_senha"). Na primeira execução, se ainda não
+  // existirem, são criadas com o padrão admin/admin. A partir
+  // daí o login sempre valida contra o que está no banco, o
+  // que permite trocar a senha na tela "Trocar senha" e ter
+  // essa alteração preservada pelo backup/restauração local.
+  // ============================================================
+
+  async function loginAdmin() {
+    if (!bancoPronto) {
+      Alert.alert(
+        'Aguarde',
+        'O banco local ainda não foi inicializado.'
+      );
+      return;
+    }
+
+    const usuarioDigitado = usuario.trim();
+    const senhaDigitada = senha.trim();
+
+    if (!usuarioDigitado || !senhaDigitada) {
+      Alert.alert(
+        'Atenção',
+        'Informe usuário e senha.'
+      );
+      return;
+    }
+
+    try {
+      setCarregando(true);
+
+      const db = await obterBanco();
+
+      // Garante a tabela
+      await db.runAsync(`
+        CREATE TABLE IF NOT EXISTS configuracao_local (
+          chave TEXT PRIMARY KEY,
+          valor TEXT,
+          atualizado_em TEXT
+        )
+      `);
+
+      let usuarioSalvo = await obterConfig('admin_usuario');
+      let senhaSalva = await obterConfig('admin_senha');
+
+      // Primeira vez: cria as credenciais padrão
+      if (!usuarioSalvo || !senhaSalva) {
+        usuarioSalvo = 'admin';
+        senhaSalva = 'admin';
+
+        await salvarConfig('admin_usuario', usuarioSalvo);
+        await salvarConfig('admin_senha', senhaSalva);
+
+        console.log(
+          'Credenciais administrativas padrão criadas.'
+        );
+      }
+
+      if (
+        usuarioDigitado !== usuarioSalvo ||
+        senhaDigitada !== senhaSalva
+      ) {
+        Alert.alert(
+          'Acesso negado',
+          'Usuário ou senha inválidos.'
+        );
+
+        return;
+      }
+
+      await registrarLog(
+        'login',
+        usuarioSalvo,
+        'Login administrativo realizado.'
+      );
+
+      // Limpa campos
+      setUsuario('');
+      setSenha('');
+
+      // Entra diretamente no painel
+      setTelaLogin('escolha');
+      setTelaAdmin('menu');
+      setTela('admin');
+
+      console.log(
+        'LOGIN ADMINISTRADOR REALIZADO COM SUCESSO'
+      );
+    } catch (error: any) {
+      console.error(
+        'ERRO NO LOGIN ADMIN:',
+        error
+      );
+
+      Alert.alert(
+        'Erro',
+        error?.message ||
+          'Erro ao abrir o banco local.'
+      );
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  // ============================================================
+  // LOGIN OPERADOR LOCAL
+  // ============================================================
+
+  async function loginCaixa() {
+    if (!verificarBancoAntesDeEntrar()) {
+      return;
+    }
+
+    const usuarioDigitado =
+      operadorUsuario.trim();
+
+    const senhaDigitada =
+      operadorSenha.trim();
+
+    if (
+      !usuarioDigitado ||
+      !senhaDigitada
+    ) {
+      Alert.alert(
+        'Atenção',
+        'Informe usuário e senha.'
+      );
+
+      return;
+    }
+
+    try {
+      setCarregando(true);
+
+      const db = await obterBanco();
+
+      const operadorEncontrado =
+        await db.getFirstAsync<{
+          id: number;
+          nome: string;
+          usuario: string | null;
+          senha_hash: string | null;
+          ativo: number;
+        }>(
+          `
+          SELECT
+            id,
+            nome,
+            usuario,
+            senha_hash,
+            ativo
+          FROM operadores_local
+          WHERE usuario = ?
+          AND ativo = 1
+          LIMIT 1
+          `,
+          usuarioDigitado
+        );
+
+      if (!operadorEncontrado) {
+        Alert.alert(
+          'Acesso negado',
+          'Operador não encontrado ou inativo.'
+        );
+
+        return;
+      }
+
+      /*
+       * Nesta primeira versão local,
+       * comparamos a senha armazenada.
+       *
+       * Se a senha estiver vazia, o operador
+       * também não poderá entrar.
+       */
+
+      const senhaArmazenada =
+        operadorEncontrado.senha_hash || '';
+
+      if (
+        senhaArmazenada !== senhaDigitada
+      ) {
+        Alert.alert(
+          'Acesso negado',
+          'Usuário ou senha inválidos.'
+        );
+
+        return;
+      }
+
+      const operadorLogado: Operador = {
+        id: Number(
+          operadorEncontrado.id
+        ),
+        nome:
+          operadorEncontrado.nome,
+        usuario:
+          operadorEncontrado.usuario ||
+          undefined,
+      };
+
+      // ========================================================
+      // ABRIR CAIXA LOCAL
+      //
+      // OBS: a tabela caixas_local usa a coluna "status"
+      // ('aberto' | 'fechado'), e NÃO possui as colunas
+      // "operador_nome", "total" ou "fechado". Essas colunas
+      // não existem no schema (ver database/banco.ts), então
+      // a query e o INSERT abaixo usam somente colunas reais.
+      // ========================================================
+
+      const caixaExistente =
+        await db.getFirstAsync<{
+          id: number;
+          operador_id: number;
+          saldo_inicial: number;
+          status: string;
+          aberto_em: string | null;
+        }>(
+          `
+          SELECT
+            id,
+            operador_id,
+            saldo_inicial,
+            status,
+            aberto_em
+          FROM caixas_local
+          WHERE operador_id = ?
+          AND status = 'aberto'
+          ORDER BY id DESC
+          LIMIT 1
+          `,
+          operadorLogado.id
+        );
+
+      let caixaId: number;
+      let saldoInicial = 0;
+
+      // O total do caixa não é armazenado em caixas_local;
+      // ele é sempre calculado a partir de vendas_local
+      // (ver Caixa.tsx -> carregarResumoCaixa).
+      const total = 0;
+
+      if (caixaExistente) {
+        caixaId =
+          Number(caixaExistente.id);
+
+        saldoInicial =
+          Number(
+            caixaExistente.saldo_inicial || 0
+          );
+      } else {
+        const agora =
+          new Date().toISOString();
+
+        const resultado =
+          await db.runAsync(
+            `
+            INSERT INTO caixas_local (
+              operador_id,
+              status,
+              saldo_inicial,
+              aberto_em,
+              sincronizado
+            )
+            VALUES (?, 'aberto', ?, ?, ?)
+            `,
+            operadorLogado.id,
+            0,
+            agora,
+            0
+          );
+
+        caixaId =
+          Number(
+            resultado.lastInsertRowId
+          );
+      }
+
+      // ========================================================
+      // ENTIDADE DO CAIXA
+      // ========================================================
+
+      setOperador(
+        operadorLogado
+      );
+
+      setCaixa({
+        id: caixaId,
+        caixaId,
+        operadorId:
+          operadorLogado.id,
+        operadorNome:
+          operadorLogado.nome,
+        saldoInicial,
+        total,
+        fechado: false,
+      });
+
+      await registrarLog(
+        'login',
+        operadorLogado.nome,
+        `Login do operador e abertura/retomada do caixa (id ${caixaId}).`
+      );
+
+      setOperadorUsuario('');
+      setOperadorSenha('');
+
+      setTelaLogin('escolha');
+      setTela('caixa');
+    } catch (error: any) {
+      console.error(
+        'Erro no login do caixa local:',
+        error
+      );
+
+      setOperador(null);
+      setCaixa(null);
+
+      Alert.alert(
+        'Erro',
+        error?.message ||
+          'Não foi possível entrar no caixa.'
+      );
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  // ============================================================
+  // SAIR
+  // ============================================================
+
+  function sair() {
+    const usuarioSaindo =
+      tela === 'caixa' && operador
+        ? operador.nome
+        : 'admin';
+
+    registrarLog(
+      'logout',
+      usuarioSaindo,
+      tela === 'caixa'
+        ? 'Operador saiu do caixa.'
+        : 'Administrador saiu do painel.'
+    );
+
+    setOperador(null);
+    setCaixa(null);
+
+    setUsuario('');
+    setSenha('');
+
+    setOperadorUsuario('');
+    setOperadorSenha('');
+
+    setTelaAdmin('menu');
+    setTelaLogin('escolha');
+    setTela('login');
+  }
+
+  // ============================================================
+  // TELA DE VERIFICAÇÃO DO PERÍODO DE TESTE
+  // ============================================================
+
+  if (verificandoTeste) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.telaCarregamentoTeste}>
+          <ActivityIndicator size="large" color="#279905" />
+
+          <Text style={styles.textoCarregamentoTeste}>
+            Verificando licença...
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ============================================================
+  // TELA DE BLOQUEIO (TESTE EXPIRADO)
+  // ============================================================
+
+  if (testeExpirado && !appDesbloqueado) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <KeyboardAvoidingView
+          style={styles.keyboardContainer}
+          behavior={
+            Platform.OS === 'ios' ? 'padding' : 'height'
+          }
+          keyboardVerticalOffset={
+            Platform.OS === 'ios' ? 0 : 24
+          }
+        >
+          <ScrollView
+            contentContainerStyle={styles.loginContainer}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            showsVerticalScrollIndicator={false}
+          >
+            <View style={styles.loginCard}>
+              <Text style={styles.bloqueioIcone}>
+                🔒
+              </Text>
+
+              <Text style={styles.loginTitulo}>
+                Período de teste encerrado
+              </Text>
+
+              <Text style={styles.bloqueioTexto}>
+                O período de avaliação gratuita de{' '}
+                {DIAS_TESTE} dias deste aplicativo
+                terminou. Para continuar usando,
+                informe a senha de desbloqueio.
+              </Text>
+
+              <Text style={styles.label}>
+                Senha de desbloqueio
+              </Text>
+
+              <TextInput
+                style={styles.input}
+                value={senhaDesbloqueio}
+                onChangeText={setSenhaDesbloqueio}
+                placeholder="Digite a senha"
+                placeholderTextColor="#9ca3af"
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="done"
+                onSubmitEditing={desbloquearComSenha}
+                editable={!verificandoSenha}
+              />
+
+              <TouchableOpacity
+                style={styles.botaoEntrar}
+                onPress={desbloquearComSenha}
+                disabled={verificandoSenha}
+              >
+                {verificandoSenha ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.botaoEntrarTexto}>
+                    Desbloquear
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    );
+  }
+
+  // ============================================================
+  // LOGIN
+  // ============================================================
+
+  if (tela === 'login') {
+    // ----------------------------------------------------------
+    // ESCOLHA ADMIN / CAIXA
+    // ----------------------------------------------------------
+
+    if (telaLogin === 'escolha') {
+      return (
+        <SafeAreaView style={styles.container}>
+          <KeyboardAvoidingView
+            style={styles.keyboardContainer}
+            behavior={
+              Platform.OS === 'ios'
+                ? 'padding'
+                : 'height'
+            }
+            keyboardVerticalOffset={
+              Platform.OS === 'ios'
+                ? 0
+                : 24
+            }
+          >
+            <ScrollView
+              contentContainerStyle={
+                styles.loginContainer
+              }
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="on-drag"
+              showsVerticalScrollIndicator={
+                false
+              }
+            >
+              <View style={styles.logoArea}>
+                <Image
+                  source={require('./img/icon.png')}
+                  style={styles.logoAdmin}
+                  resizeMode="contain"
+                />
+              </View>
+
+              <View
+                style={styles.loginCard}
+              >
+                <Text
+                  style={styles.loginTitulo}
+                >
+                  Acesso ao sistema
+                </Text>
+
+                <TouchableOpacity
+                  style={[
+                    styles.botaoPrincipal,
+                    !bancoPronto &&
+                      styles.botaoDesabilitado,
+                  ]}
+                  onPress={() =>
+                    setTelaLogin('admin')
+                  }
+                  disabled={!bancoPronto}
+                >
+                  <Text
+                    style={
+                      styles.botaoPrincipalTexto
+                    }
+                  >
+                    Administrador
+                  </Text>
+
+                  <Text
+                    style={
+                      styles.botaoDescricao
+                    }
+                  >
+                    Produtos, operadores,
+                    avarias, relatórios e
+                    backup
+                  </Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.botaoSecundario,
+                    !bancoPronto &&
+                      styles.botaoDesabilitado,
+                  ]}
+                  onPress={() =>
+                    setTelaLogin('caixa')
+                  }
+                  disabled={!bancoPronto}
+                >
+                  <Text
+                    style={
+                      styles.botaoSecundarioTexto
+                    }
+                  >
+                    Operador de Caixa
+                  </Text>
+
+                  <Text
+                    style={
+                      styles.botaoDescricaoEscuro
+                    }
+                  >
+                    Acessar o PDV
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </KeyboardAvoidingView>
+
+          {/* ====================================================
+              MODAL DE BOAS-VINDAS / AVISO DE TESTE DE 30 DIAS
+              ==================================================== */}
+
+          <Modal
+            visible={mostrarBoasVindas}
+            transparent
+            animationType="fade"
+            onRequestClose={() =>
+              setMostrarBoasVindas(false)
+            }
+          >
+            <View style={styles.modalFundoBoasVindas}>
+              <View style={styles.modalBoasVindas}>
+                <Text style={styles.boasVindasIcone}>
+                  👋
+                </Text>
+
+                <Text style={styles.boasVindasTitulo}>
+                  Bem-vindo(a) ao Venda Ágil!
+                </Text>
+
+                <Text style={styles.boasVindasTexto}>
+                  Você está usando o período de teste
+                  gratuito de {DIAS_TESTE} dias.
+                </Text>
+
+                <Text style={styles.boasVindasDias}>
+                  {diasRestantesTeste}{' '}
+                  {diasRestantesTeste === 1
+                    ? 'dia restante'
+                    : 'dias restantes'}
+                </Text>
+
+                <Text
+                  style={
+                    styles.boasVindasTextoSecundario
+                  }
+                >
+                  Após o período de teste, será
+                  necessário informar uma senha de
+                  desbloqueio para continuar usando o
+                  aplicativo.
+                </Text>
+
+                <TouchableOpacity
+                  style={styles.botaoBoasVindas}
+                  onPress={() =>
+                    setMostrarBoasVindas(false)
+                  }
+                >
+                  <Text
+                    style={
+                      styles.botaoBoasVindasTexto
+                    }
+                  >
+                    Começar a usar
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
+        </SafeAreaView>
+      );
+    }
+
+    // ----------------------------------------------------------
+    // LOGIN
+    // ----------------------------------------------------------
+
+    const isAdmin =
+      telaLogin === 'admin';
+
+    return (
+      <SafeAreaView style={styles.container}>
+        <KeyboardAvoidingView
+          style={styles.keyboardContainer}
+          behavior={
+            Platform.OS === 'ios'
+              ? 'padding'
+              : 'height'
+          }
+          keyboardVerticalOffset={
+            Platform.OS === 'ios'
+              ? 0
+              : 24
+          }
+        >
+          <ScrollView
+            contentContainerStyle={
+              styles.loginContainer
+            }
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
+            showsVerticalScrollIndicator={
+              false
+            }
+          >
+            <View
+              style={styles.loginCard}
+            >
+              <TouchableOpacity
+                onPress={() =>
+                  setTelaLogin('escolha')
+                }
+              >
+                <Text
+                  style={styles.voltarLogin}
+                >
+                  ← Voltar
+                </Text>
+              </TouchableOpacity>
+
+              <Text
+                style={styles.loginTitulo}
+              >
+                {isAdmin
+                  ? 'Administrador'
+                  : 'Operador de Caixa'}
+              </Text>
+
+              <Text style={styles.label}>
+                Usuário
+              </Text>
+
+              <TextInput
+                style={styles.input}
+                value={
+                  isAdmin
+                    ? usuario
+                    : operadorUsuario
+                }
+                onChangeText={
+                  isAdmin
+                    ? setUsuario
+                    : setOperadorUsuario
+                }
+                placeholder="Digite o usuário"
+                placeholderTextColor="#9ca3af"
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="next"
+              />
+
+              <Text style={styles.label}>
+                Senha
+              </Text>
+
+              <TextInput
+                style={styles.input}
+                value={
+                  isAdmin
+                    ? senha
+                    : operadorSenha
+                }
+                onChangeText={
+                  isAdmin
+                    ? setSenha
+                    : setOperadorSenha
+                }
+                placeholder="Digite a senha"
+                placeholderTextColor="#9ca3af"
+                secureTextEntry
+                autoCapitalize="none"
+                autoCorrect={false}
+                returnKeyType="done"
+                onSubmitEditing={
+                  isAdmin
+                    ? loginAdmin
+                    : loginCaixa
+                }
+              />
+
+              <TouchableOpacity
+                style={styles.botaoEntrar}
+                onPress={
+                  isAdmin
+                    ? loginAdmin
+                    : loginCaixa
+                }
+                disabled={carregando}
+              >
+                {carregando ? (
+                  <ActivityIndicator
+                    color="#fff"
+                  />
+                ) : (
+                  <Text
+                    style={
+                      styles.botaoEntrarTexto
+                    }
+                  >
+                    {isAdmin
+                      ? 'Entrar'
+                      : 'Entrar no Caixa'}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      </SafeAreaView>
+    );
+  }
+
+  // ============================================================
+  // ADMIN
+  // ============================================================
+
+  if (tela === 'admin') {
+    // ----------------------------------------------------------
+    // TELAS INTERNAS
+    // ----------------------------------------------------------
+
+    if (telaAdmin !== 'menu') {
+      const titulos: Record<
+        Exclude<TelaAdmin, 'menu'>,
+        string
+      > = {
+        cadastroProduto:
+          'Cadastrar produto',
+
+        gerenciarProdutos:
+          'Gerenciar produtos',
+
+        gerenciarOperadores:
+          'Gerenciar operadores',
+
+        avarias:
+          'Avarias',
+
+        relatorios:
+          'Relatório de vendas',
+
+        ia:
+          '🤖 Assistente IA',
+
+        backup:
+          '💾 Backup e Restauração',
+
+        trocarSenha:
+          '🔑 Trocar senha do admin',
+
+        logAtividades:
+          '📋 Log de atividades',
+
+        configuracaoPagamento:
+          '💳 Configurar recebimento PIX',
+      };
+
+      return (
+        <SafeAreaView style={styles.container}>
+          <View style={styles.topoInterno}>
+            <TouchableOpacity
+              onPress={() =>
+                setTelaAdmin('menu')
+              }
+            >
+              <Text
+                style={
+                  styles.voltarInterno
+                }
+              >
+                ← Voltar
+              </Text>
+            </TouchableOpacity>
+
+            <Text
+              style={styles.topoTitulo}
+            >
+              {titulos[telaAdmin]}
+            </Text>
+          </View>
+
+          {telaAdmin ===
+            'cadastroProduto' && (
+            <CadastroProduto />
+          )}
+
+          {telaAdmin ===
+            'gerenciarProdutos' && (
+            <GerenciarProdutos />
+          )}
+
+          {telaAdmin ===
+            'gerenciarOperadores' && (
+            <GerenciarOperadores />
+          )}
+
+          {telaAdmin === 'avarias' && (
+            <Avarias />
+          )}
+
+          {telaAdmin ===
+            'relatorios' && (
+            <Relatorios
+              onVoltar={() =>
+                setTelaAdmin('menu')
+              }
+            />
+          )}
+
+          {telaAdmin === 'ia' && (
+            <IA />
+          )}
+
+          {telaAdmin === 'backup' && (
+            <Backup />
+          )}
+
+          {telaAdmin === 'trocarSenha' && (
+            <TrocarSenha />
+          )}
+
+          {telaAdmin === 'logAtividades' && (
+            <LogAtividades />
+          )}
+
+          {telaAdmin === 'configuracaoPagamento' && (
+            <ConfiguracaoPagamento />
+          )}
+        </SafeAreaView>
+      );
+    }
+
+    // ----------------------------------------------------------
+    // MENU ADMINISTRATIVO
+    // ----------------------------------------------------------
+
+    return (
+      <SafeAreaView style={styles.container}>
+        <ScrollView
+          contentContainerStyle={
+            styles.adminContainer
+          }
+        >
+          <View
+            style={styles.adminCabecalho}
+          >
+            <Text
+              style={styles.adminSubtitulo}
+            >
+              Painel Administrativo
+            </Text>
+
+            <TouchableOpacity
+              style={
+                styles.botaoSairPequeno
+              }
+              onPress={sair}
+            >
+              <Text
+                style={styles.botaoSairTexto}
+              >
+                Sair
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* PRODUTOS */}
+
+          <Text
+            style={styles.secaoMenuTitulo}
+          >
+            Produtos
+          </Text>
+
+          <MenuButton
+            title="Cadastrar produtos"
+            description="Cadastrar produtos novos ou ainda não cadastrados"
+            onPress={() =>
+              setTelaAdmin(
+                'cadastroProduto'
+              )
+            }
+          />
+
+          <MenuButton
+            title="Gerenciar produtos"
+            description="Visualizar, editar e excluir produtos"
+            onPress={() =>
+              setTelaAdmin(
+                'gerenciarProdutos'
+              )
+            }
+          />
+
+          {/* ADMINISTRAÇÃO */}
+
+          <Text
+            style={styles.secaoMenuTitulo}
+          >
+            Administração
+          </Text>
+
+          <MenuButton
+            title="Gerenciar operadores"
+            description="Adicionar e gerenciar operadores do caixa"
+            onPress={() =>
+              setTelaAdmin(
+                'gerenciarOperadores'
+              )
+            }
+          />
+
+          <MenuButton
+            title="Avarias"
+            description="Registrar perdas e produtos danificados"
+            onPress={() =>
+              setTelaAdmin('avarias')
+            }
+          />
+
+          {/* PAGAMENTOS */}
+
+          <Text
+            style={styles.secaoMenuTitulo}
+          >
+            Pagamentos
+          </Text>
+
+          <MenuButton
+            title="💳 Configurar recebimento PIX"
+            description="Conectar Mercado Pago para receber os pagamentos"
+            onPress={() =>
+              setTelaAdmin(
+                'configuracaoPagamento'
+              )
+            }
+          />
+
+          {/* INTELIGÊNCIA */}
+
+          <Text
+            style={styles.secaoMenuTitulo}
+          >
+            Inteligência
+          </Text>
+
+          <MenuButton
+            title="🤖 Perguntar à IA"
+            description="Pergunte sobre vendas, estoque, produtos, pagamentos e faturamento"
+            onPress={() =>
+              setTelaAdmin('ia')
+            }
+          />
+
+          {/* RELATÓRIOS */}
+
+          <Text
+            style={styles.secaoMenuTitulo}
+          >
+            Relatórios
+          </Text>
+
+          <MenuButton
+            title="Relatório de vendas"
+            description="Consultar vendas, valores, operadores, data e hora"
+            onPress={() =>
+              setTelaAdmin(
+                'relatorios'
+              )
+            }
+          />
+
+          {/* SISTEMA */}
+
+          <Text
+            style={styles.secaoMenuTitulo}
+          >
+            Sistema
+          </Text>
+
+          <MenuButton
+            title="💾 Backup e restauração"
+            description="Fazer backup semanal ou restaurar o último backup salvo"
+            onPress={() =>
+              setTelaAdmin('backup')
+            }
+          />
+
+          <MenuButton
+            title="🔑 Trocar senha"
+            description="Alterar usuário e senha do administrador"
+            onPress={() =>
+              setTelaAdmin('trocarSenha')
+            }
+          />
+
+          <MenuButton
+            title="📋 Log de atividades"
+            description="Ver histórico de logins, cadastros, vendas e outras ações"
+            onPress={() =>
+              setTelaAdmin('logAtividades')
+            }
+          />
+        </ScrollView>
+      </SafeAreaView>
+    );
+  }
+
+  // ============================================================
+  // CAIXA
+  // ============================================================
+
+  if (tela === 'caixa') {
+    return (
+      <SafeAreaView style={styles.container}>
+        <Caixa
+          operador={operador}
+          caixa={caixa}
+          onLogout={sair}
+        />
+      </SafeAreaView>
+    );
+  }
+
+  return null;
+}
+
+// ============================================================
+// BOTÃO DO MENU
+// ============================================================
+
+function MenuButton({
+  title,
+  description,
+  onPress,
+}: {
+  title: string;
+  description: string;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      style={styles.menuButton}
+      onPress={onPress}
+    >
+      <Text
+        style={styles.menuButtonTitle}
+      >
+        {title}
+      </Text>
+
+      <Text
+        style={
+          styles.menuButtonDescription
+        }
+      >
+        {description}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+// ============================================================
+// ESTILOS
+// ============================================================
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#b6eeb6',
+    borderRadius: 5,
+  },
+
+  keyboardContainer: {
+    flex: 1,
+  },
+
+  loginContainer: {
+    flexGrow: 1,
+    justifyContent: 'center',
+    padding: 20,
+    paddingBottom: 80,
+  },
+
+  logoArea: {
+    alignItems: 'center',
+    marginBottom: 30,
+  },
+
+  logoAdmin: {
+    width: 300,
+    height: 300,
+  },
+
+  loginCard: {
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 20,
+    elevation: 4,
+  },
+
+  loginTitulo: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#518859',
+    marginBottom: 20,
+  },
+
+  voltarLogin: {
+    color: '#374151',
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 18,
+    backgroundColor: '#a4e4ba',
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+  },
+
+  label: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#374151',
+    marginBottom: 6,
+    marginTop: 12,
+  },
+
+  input: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 9,
+    paddingHorizontal: 13,
+    paddingVertical: 12,
+    color: '#161d2c',
+    fontSize: 14,
+  },
+
+  botaoDesabilitado: {
+    opacity: 0.5,
+  },
+
+  botaoPrincipal: {
+    backgroundColor: '#279905',
+    borderRadius: 12,
+    padding: 17,
+    marginBottom: 12,
+  },
+
+  botaoPrincipalTexto: {
+    color: '#f5f5f5',
+    fontSize: 17,
+    fontWeight: '800',
+  },
+
+  botaoDescricao: {
+    color: '#2ff707',
+    fontSize: 12,
+    marginTop: 5,
+  },
+
+  botaoSecundario: {
+    backgroundColor: '#279905',
+    borderRadius: 12,
+    padding: 17,
+  },
+
+  botaoSecundarioTexto: {
+    color: '#f5f8ff',
+    fontSize: 17,
+    fontWeight: '800',
+  },
+
+  botaoDescricaoEscuro: {
+    color: '#2ff707',
+    fontSize: 12,
+    marginTop: 5,
+  },
+
+  botaoEntrar: {
+    backgroundColor: '#2563eb',
+    borderRadius: 9,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 22,
+  },
+
+  botaoEntrarTexto: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+
+  topoInterno: {
+    height: 58,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e5e7eb',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+  },
+
+  voltarInterno: {
+    color: '#374151',
+    fontSize: 13,
+    fontWeight: '700',
+    backgroundColor: '#a4e4ba',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    marginRight: 15,
+  },
+
+  topoTitulo: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#111827',
+  },
+
+  adminContainer: {
+    padding: 18,
+    paddingBottom: 40,
+  },
+
+  adminCabecalho: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 28,
+  },
+
+  adminSubtitulo: {
+    fontSize: 13,
+    color: '#6b7280',
+    marginTop: 4,
+  },
+
+  botaoSairPequeno: {
+    backgroundColor: '#fee2e2',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 8,
+  },
+
+  botaoSairTexto: {
+    color: '#b91c1c',
+    fontWeight: '800',
+    fontSize: 13,
+  },
+
+  secaoMenuTitulo: {
+    fontSize: 13,
+    color: '#6b7280',
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    marginTop: 8,
+    marginBottom: 9,
+  },
+
+  menuButton: {
+    backgroundColor: '#fff',
+    borderRadius: 13,
+    padding: 17,
+    marginBottom: 11,
+    elevation: 2,
+  },
+
+  menuButtonTitle: {
+    color: '#111827',
+    fontSize: 17,
+    fontWeight: '800',
+  },
+
+  menuButtonDescription: {
+    color: '#6b7280',
+    fontSize: 12,
+    marginTop: 5,
+    lineHeight: 17,
+  },
+
+  // ============================================================
+  // TESTE / BLOQUEIO / BOAS-VINDAS
+  // ============================================================
+
+  telaCarregamentoTeste: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  textoCarregamentoTeste: {
+    marginTop: 12,
+    color: '#374151',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+
+  bloqueioIcone: {
+    fontSize: 40,
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+
+  bloqueioTexto: {
+    fontSize: 13,
+    color: '#4b5563',
+    marginBottom: 18,
+    lineHeight: 19,
+  },
+
+  modalFundoBoasVindas: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+
+  modalBoasVindas: {
+    width: '100%',
+    maxWidth: 400,
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    padding: 24,
+    alignItems: 'center',
+  },
+
+  boasVindasIcone: {
+    fontSize: 40,
+    marginBottom: 8,
+  },
+
+  boasVindasTitulo: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: '#111827',
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+
+  boasVindasTexto: {
+    fontSize: 14,
+    color: '#374151',
+    textAlign: 'center',
+    lineHeight: 20,
+  },
+
+  boasVindasDias: {
+    marginTop: 12,
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#279905',
+    textAlign: 'center',
+  },
+
+  boasVindasTextoSecundario: {
+    marginTop: 14,
+    fontSize: 12,
+    color: '#6b7280',
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+
+  botaoBoasVindas: {
+    marginTop: 20,
+    backgroundColor: '#279905',
+    borderRadius: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 30,
+    width: '100%',
+    alignItems: 'center',
+  },
+
+  botaoBoasVindasTexto: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+});

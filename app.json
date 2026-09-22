@@ -1,0 +1,76 @@
+{
+  "expo": {
+    "name": "VendaÁgil",
+    "slug": "vendaagil",
+    "version": "2.0.1",
+    "orientation": "portrait",
+    "icon": "./src/app/img/icon.png",
+    "scheme": "vendaagil",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "icon": "./assets/expo.icon",
+      "infoPlist": {
+        "NSSpeechRecognitionUsageDescription": "Permita o reconhecimento de voz para converter sua fala em texto da venda agil.",
+        "NSMicrophoneUsageDescription": "Permita o uso do microfone para enviar comandos de voz para a IA venda agil."
+      }
+    },
+    "android": {
+      "permissions": [
+        "CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./src/app/img/icon.png",
+        "monochromeImage": "./src/app/img/icon.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "package": "com.edonsilva.mobile"
+    },
+    "web": {
+      "output": "static",
+      "favicon": "./src/app/img/icon.png"
+    },
+    "plugins": [
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Permita o uso do microfone para enviar comandos de voz para a IA venda agil.",
+          "speechRecognitionPermission": "Permita o reconhecimento de voz para converter sua fala em texto da venda agil."
+        }
+      ],
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#b1eb75",
+          "image": "./src/app/img/icon.png",
+          "imageWidth": 250
+        }
+      ],
+      "expo-image",
+      "expo-web-browser",
+      "expo-speech-recognition",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      "expo-sqlite",
+      "expo-sharing"
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "c2c0c2f6-576d-4b92-bbdb-e1488e968777"
+      }
+    }
+  }
+}
