@@ -372,9 +372,6 @@ export default function CadastroProduto() {
         resultado
       );
 
-      // -----------------------------------------------------
-      // CONFIRMAR QUE FOI GRAVADO
-      // -----------------------------------------------------
 
       const produtoSalvo =
         await db.getFirstAsync<{

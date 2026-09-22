@@ -381,11 +381,7 @@ Forma de pagamento: ${venda.forma_pagamento || 'não informado'}
     }
   }
 
-  /*
-   * ---------------------------------------------------------
-   * ESTOQUE
-   * ---------------------------------------------------------
-   */
+
   if (querEstoque) {
     try {
       const produtos = await db.getAllAsync<any>(
