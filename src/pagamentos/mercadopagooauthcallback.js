@@ -96,15 +96,11 @@ exports.handler = async function handler(event) {
   }
 };
 
-// ============================================================
-// netlify.toml (opcional, na raiz do projeto da função, se
-// quiser uma URL mais bonita em vez do caminho /.netlify/functions/...)
-// ============================================================
-//
-// [build]
-//   functions = "netlify/functions"
-//
-// [[redirects]]
-//   from = "/api/mercadopago/oauth-callback"
-//   to = "/.netlify/functions/mercadoPagoOauthCallback"
-//   status = 200
+ 
+[build]
+  functions = "src/pagamentos"
+
+[[redirects]]
+  from = "/api/mercadopago/oauth-callback"
+  to = "/.netlify/functions/mercadoPagoOauthCallback"
+  status = 200
