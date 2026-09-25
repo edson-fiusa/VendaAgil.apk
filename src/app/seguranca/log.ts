@@ -1,4 +1,6 @@
-import { obterBanco } from '../database/banco';
+
+
+import { obterBanco } from '../../database/banco';
 
 // ============================================================
 // LOG DE ATIVIDADES

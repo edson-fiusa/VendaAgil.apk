@@ -1,8 +1,8 @@
 {
   "expo": {
     "name": "VendaÁgil",
-    "slug": "vendaagil",
-    "version": "2.0.1",
+    "slug": "mobile",
+    "version": "2.0.3",
     "orientation": "portrait",
     "icon": "./src/app/img/icon.png",
     "scheme": "vendaagil",
@@ -60,7 +60,8 @@
         }
       ],
       "expo-sqlite",
-      "expo-sharing"
+      "expo-sharing",
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,
@@ -71,6 +72,7 @@
       "eas": {
         "projectId": "c2c0c2f6-576d-4b92-bbdb-e1488e968777"
       }
-    }
+    },
+    "owner": "edon-silva"
   }
 }

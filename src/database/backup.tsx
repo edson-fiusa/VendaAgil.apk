@@ -1,22 +1,25 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import {
-  ActivityIndicator,
-  Alert,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from 'react-native';
 
 import {
-  BackupInfo,
-  compartilharBackupLocal,
-  fazerBackupLocal,
-  obterInfoBackupLocal,
-  restaurarBackupLocal,
-} from '../database/backup';
+    BackupInfo,
+    compartilharBackupLocal,
+    fazerBackupLocal,
+    gerarECompartilharRelatorioPdfLocal,
+    obterInfoBackupLocal,
+    restaurarBackupLocal,
+} from '../app/seguranca/backup';
+
+import ModalSenhaPdf from '../app/seguranca/Modalsenhapdf';
 
 // ============================================================
 // UTILITÁRIOS
@@ -68,6 +71,10 @@ export default function Backup() {
   const [restaurando, setRestaurando] = useState(false);
 
   const [enviando, setEnviando] = useState(false);
+
+  const [gerandoPdf, setGerandoPdf] = useState(false);
+
+  const [modalSenhaVisivel, setModalSenhaVisivel] = useState(false);
 
   const carregarInfo = useCallback(async () => {
     try {
@@ -185,6 +192,34 @@ export default function Backup() {
     }
   }
 
+  // Agora, em vez de gerar o PDF direto, o botão abre o modal que
+  // pede (ou cadastra) a senha de proteção.
+  function lidarComRelatorioPdf() {
+    setModalSenhaVisivel(true);
+  }
+
+  // Chamado pelo ModalSenhaPdf quando a senha já foi cadastrada ou
+  // conferida com sucesso. `senha` chega em texto puro, só para uso
+  // imediato — nada aqui a guarda em lugar nenhum.
+  async function lidarComSenhaConfirmada(senha: string) {
+    setModalSenhaVisivel(false);
+
+    try {
+      setGerandoPdf(true);
+
+      await gerarECompartilharRelatorioPdfLocal(senha);
+    } catch (erro: any) {
+      console.error('Erro ao gerar relatório em PDF:', erro);
+
+      Alert.alert(
+        'Erro ao gerar PDF',
+        erro?.message || 'Não foi possível gerar o relatório em PDF agora.'
+      );
+    } finally {
+      setGerandoPdf(false);
+    }
+  }
+
   return (
     <ScrollView
       contentContainerStyle={styles.container}
@@ -271,6 +306,35 @@ export default function Backup() {
       </View>
 
       <View style={styles.card}>
+        <Text style={styles.titulo}>Relatório em PDF</Text>
+
+        <Text style={styles.texto}>
+          Gera um relatório legível (produtos, operadores, vendas e
+          avarias) em PDF, protegido por senha, pronto para imprimir ou
+          enviar por e-mail e WhatsApp. Este PDF é só para leitura — ele
+          não substitui o backup acima e não pode ser usado para
+          restaurar os dados.
+        </Text>
+
+        <TouchableOpacity
+          style={[
+            styles.botaoPdf,
+            gerandoPdf && styles.botaoDesabilitado,
+          ]}
+          onPress={lidarComRelatorioPdf}
+          disabled={gerandoPdf || fazendoBackup || restaurando || enviando}
+        >
+          {gerandoPdf ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.botaoPdfTexto}>
+              Gerar e enviar relatório em PDF
+            </Text>
+          )}
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.card}>
         <Text style={styles.titulo}>Restaurar backup</Text>
 
         <Text style={styles.texto}>
@@ -296,6 +360,12 @@ export default function Backup() {
           )}
         </TouchableOpacity>
       </View>
+
+      <ModalSenhaPdf
+        visivel={modalSenhaVisivel}
+        aoFechar={() => setModalSenhaVisivel(false)}
+        aoConfirmar={lidarComSenhaConfirmada}
+      />
     </ScrollView>
   );
 }
@@ -378,6 +448,19 @@ const styles = StyleSheet.create({
 
   botaoTerciarioTexto: {
     color: '#1d4ed8',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+
+  botaoPdf: {
+    backgroundColor: '#fef3c7',
+    borderRadius: 10,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+
+  botaoPdfTexto: {
+    color: '#92400e',
     fontSize: 15,
     fontWeight: '800',
   },

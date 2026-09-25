@@ -1,19 +1,19 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    KeyboardAvoidingView,
+    Platform,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    View,
 } from 'react-native';
 
-import { obterBanco } from '../../src/database/banco';
-import { registrarLog } from '../../src/utils/log';
+import { obterBanco } from '../../database/banco';
+import { registrarLog } from './log';
 
 // ============================================================
 // COMPONENTE: TROCAR SENHA DO ADMINISTRADOR

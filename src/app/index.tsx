@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import {
   ActivityIndicator,
@@ -22,9 +22,7 @@ import {
   obterBanco,
 } from '../../src/database/banco';
 
-import { verificarSenhaMestre } from '../../src/utils/seguranca';
-
-import { criarTabelaConfiguracoesPagamento } from '../../src/pagamentos/bancoPagamento';
+import { verificarSenhaMestre } from './seguranca/seguranca';
 
 import Avarias from './avarias';
 import CadastroProduto from './cadastro-produto';
@@ -33,12 +31,11 @@ import GerenciarOperadores from './gerenciar-operadores';
 import GerenciarProdutos from './gerenciar-produtos';
 import IA from './ia';
 import Relatorios from './relatorios';
-import Backup from './backup';
-import TrocarSenha from './trocar-senha';
-import LogAtividades from './log_atividades';
-import ConfiguracaoPagamento from '../pagamentos/configuracao-pagamento';
+import Backup from '../database/backup';
+import LogAtividades from './seguranca/log_atividades';
+import TrocarSenha from './seguranca/trocar-senha';
 
-import { registrarLog } from '../../src/utils/log';
+import { registrarLog } from '../../src/app/seguranca/log';
 
 // ============================================================
 // INTERFACES
@@ -74,8 +71,7 @@ type TelaAdmin =
   | 'ia'
   | 'backup'
   | 'trocarSenha'
-  | 'logAtividades'
-  | 'configuracaoPagamento';
+  | 'logAtividades';
 
 // ============================================================
 // COMPONENTE PRINCIPAL
@@ -114,9 +110,6 @@ export default function Index() {
         );
 
         await inicializarBanco();
-
-        // Tabela de configuração de pagamento (Mercado Pago)
-        await criarTabelaConfiguracoesPagamento();
 
         if (ativo) {
           setBancoPronto(true);
@@ -1196,9 +1189,6 @@ export default function Index() {
 
         logAtividades:
           '📋 Log de atividades',
-
-        configuracaoPagamento:
-          '💳 Configurar recebimento PIX',
       };
 
       return (
@@ -1267,10 +1257,6 @@ export default function Index() {
 
           {telaAdmin === 'logAtividades' && (
             <LogAtividades />
-          )}
-
-          {telaAdmin === 'configuracaoPagamento' && (
-            <ConfiguracaoPagamento />
           )}
         </SafeAreaView>
       );
@@ -1361,24 +1347,6 @@ export default function Index() {
             description="Registrar perdas e produtos danificados"
             onPress={() =>
               setTelaAdmin('avarias')
-            }
-          />
-
-          {/* PAGAMENTOS */}
-
-          <Text
-            style={styles.secaoMenuTitulo}
-          >
-            Pagamentos
-          </Text>
-
-          <MenuButton
-            title="💳 Configurar recebimento PIX"
-            description="Conectar Mercado Pago para receber os pagamentos"
-            onPress={() =>
-              setTelaAdmin(
-                'configuracaoPagamento'
-              )
             }
           />
 

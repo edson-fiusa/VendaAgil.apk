@@ -15,7 +15,7 @@ import {
   LogAtividade,
   limparLogs,
   obterLogs,
-} from '../../src/utils/log';
+} from '../seguranca/log';
 
 // ============================================================
 // RÓTULOS DE EXIBIÇÃO POR TIPO DE AÇÃO

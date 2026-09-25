@@ -7,7 +7,6 @@ import {
   KeyboardAvoidingView,
   Modal,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -20,7 +19,6 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import QRCode from 'react-native-qrcode-svg';
 
 import { obterBanco } from '../database/banco';
-import { buscarConfiguracaoPagamento } from '../pagamentos/bancoPagamento';
 
 type Produto = {
   id: number;
@@ -43,6 +41,8 @@ type ItemCarrinho = {
   quantidade: number;
 };
 
+type FormaPagamento = 'dinheiro' | 'pix' | 'outros';
+
 type Fechamento = {
   saldoInicial: number;
   dinheiro: number;
@@ -57,7 +57,7 @@ type VendaConcluida = {
   id: number;
   itens: ItemCarrinho[];
   total: number;
-  formaPagamento: string;
+  formaPagamento: FormaPagamento;
   valorRecebido: number;
   troco: number;
   data: string;
@@ -69,6 +69,21 @@ type CaixaProps = {
   onLogout: () => void;
   toast?: (mensagem: string) => void;
 };
+
+// ============================================================
+// MERCADO PAGO — TOKEN FIXO (UMA CONTA SÓ, SEM OAUTH POR LOJA)
+//
+// Configure no .env / app.config:
+//   EXPO_PUBLIC_MP_ACCESS_TOKEN=APP_USR-xxxxxxxx
+//
+// Esse token é o "Access Token" de PRODUÇÃO da conta do
+// Mercado Pago que vai RECEBER os pagamentos PIX gerados
+// pelo app. Não é o client_id/client_secret de OAuth — é só
+// isso, um token único usado por todas as lojas.
+// ============================================================
+
+const MP_ACCESS_TOKEN = process.env
+  .EXPO_PUBLIC_MP_ACCESS_TOKEN as string;
 
 const STATUS_FINAIS_ERRO = [
   'cancelled',
@@ -85,6 +100,21 @@ const MAX_FALHAS_CONSULTA_PIX = 5;
 // verificar manualmente (o botão "Já paguei" também fica disponível
 // desde o início, isso é só um aviso complementar).
 const TEMPO_AVISO_DEMORA_MS = 45_000;
+
+// Tempo de validade do QR Code do PIX. Depois desse prazo, o app para
+// de aceitar aquele QR Code (mesmo que o Mercado Pago ainda não tenha
+// expirado a cobrança) e pede pro operador gerar um novo.
+const TEMPO_EXPIRACAO_PIX_MS = 4 * 60 * 1000; // 10 minutos
+
+function formatarTempoRestante(ms: number): string {
+  const totalSegundos = Math.max(0, Math.ceil(ms / 1000));
+  const minutos = Math.floor(totalSegundos / 60);
+  const segundos = totalSegundos % 60;
+
+  return `${String(minutos).padStart(2, '0')}:${String(
+    segundos
+  ).padStart(2, '0')}`;
+}
 
 function gerarIdempotencyKey(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
@@ -135,6 +165,12 @@ function fmt3(valor: any): string {
   });
 }
 
+function nomeFormaPagamento(forma: FormaPagamento): string {
+  if (forma === 'pix') return 'PIX';
+  if (forma === 'outros') return 'Outros';
+  return 'Dinheiro';
+}
+
 export default function Caixa({
   operador,
   caixa,
@@ -145,7 +181,7 @@ export default function Caixa({
   const [produtos, setProdutos] = useState<Produto[]>([]);
   const [carrinho, setCarrinho] = useState<ItemCarrinho[]>([]);
 
-  const [pagamento, setPagamento] = useState<'dinheiro' | 'pix'>(
+  const [pagamento, setPagamento] = useState<FormaPagamento>(
     'dinheiro'
   );
 
@@ -164,6 +200,8 @@ export default function Caixa({
   const [pixErro, setPixErro] = useState('');
   const [pixPago, setPixPago] = useState(false);
   const [pixAvisoDemora, setPixAvisoDemora] = useState(false);
+  const [pixExpiraEm, setPixExpiraEm] = useState<number | null>(null);
+  const [pixTempoRestante, setPixTempoRestante] = useState('');
 
   const [cupom, setCupom] = useState(false);
   const [vendaConcluida, setVendaConcluida] = useState<VendaConcluida | null>(null);
@@ -183,6 +221,16 @@ export default function Caixa({
     null
   );
 
+  // Contador regressivo exibido no modal (atualiza a cada 1s) e o
+  // timeout que expira o PIX de fato quando o prazo acaba.
+  const pixContadorIntervalRef = useRef<ReturnType<
+    typeof setInterval
+  > | null>(null);
+
+  const pixExpiracaoTimeoutRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+
   // Trava síncrona (ref, não state) contra chamadas concorrentes do polling
   // de PIX que poderiam finalizar a mesma venda mais de uma vez.
   const pixProcessandoRef = useRef(false);
@@ -190,12 +238,6 @@ export default function Caixa({
   // Conta falhas seguidas de consulta ao Mercado Pago (erro de rede, HTTP,
   // resposta inesperada). Zera sempre que uma consulta funciona.
   const falhasConsultaRef = useRef(0);
-
-  // Token do Mercado Pago DA LOJA (conectado via OAuth em Configurar
-  // recebimento PIX). Guardado num ref no momento em que a cobrança é
-  // gerada, para que o polling e a verificação manual usem sempre o
-  // mesmo token que criou aquela cobrança específica.
-  const tokenPixRef = useRef<string | null>(null);
 
   function limparTimersPix() {
     if (pixIntervalRef.current) {
@@ -207,6 +249,48 @@ export default function Caixa({
       clearTimeout(pixAvisoTimeoutRef.current);
       pixAvisoTimeoutRef.current = null;
     }
+
+    if (pixContadorIntervalRef.current) {
+      clearInterval(pixContadorIntervalRef.current);
+      pixContadorIntervalRef.current = null;
+    }
+
+    if (pixExpiracaoTimeoutRef.current) {
+      clearTimeout(pixExpiracaoTimeoutRef.current);
+      pixExpiracaoTimeoutRef.current = null;
+    }
+  }
+
+  function expirarPix() {
+    limparTimersPix();
+
+    pixProcessandoRef.current = false;
+
+    setPixExpiraEm(null);
+    setPixTempoRestante('');
+    setPixErro(
+      'O QR Code expirou sem confirmação de pagamento. Gere um novo PIX.'
+    );
+  }
+
+  function iniciarContadorPix(expiraEm: number) {
+    setPixExpiraEm(expiraEm);
+    setPixTempoRestante(formatarTempoRestante(expiraEm - Date.now()));
+
+    pixContadorIntervalRef.current = setInterval(() => {
+      const restante = expiraEm - Date.now();
+
+      if (restante <= 0) {
+        setPixTempoRestante('00:00');
+        return;
+      }
+
+      setPixTempoRestante(formatarTempoRestante(restante));
+    }, 1000);
+
+    pixExpiracaoTimeoutRef.current = setTimeout(() => {
+      expirarPix();
+    }, Math.max(0, expiraEm - Date.now()));
   }
 
   useEffect(() => {
@@ -495,7 +579,7 @@ export default function Caixa({
   }
 
   async function registrarVendaLocal(
-    forma: 'dinheiro' | 'pix',
+    forma: FormaPagamento,
     mercadoPagoId?: string | null
   ) {
     if (!carrinho.length) {
@@ -676,7 +760,7 @@ export default function Caixa({
   }
 
   async function finalizarVendaLocal(
-    forma: 'dinheiro' | 'pix',
+    forma: FormaPagamento,
     mercadoPagoId?: string | null
   ) {
     try {
@@ -702,6 +786,8 @@ export default function Caixa({
       setPix(null);
       setPixPago(false);
       setPixErro('');
+      setPixExpiraEm(null);
+      setPixTempoRestante('');
       setCupom(true);
 
       await carregarProdutos();
@@ -735,33 +821,19 @@ export default function Caixa({
       return;
     }
 
+    if (!MP_ACCESS_TOKEN) {
+      setPixErro(
+        'Token do Mercado Pago não configurado. Defina ' +
+          'EXPO_PUBLIC_MP_ACCESS_TOKEN no .env do app.'
+      );
+      return;
+    }
+
     try {
       setPixCarregando(true);
       setPixErro('');
       setPixPago(false);
       setPixAvisoDemora(false);
-
-      // Busca o token do Mercado Pago DA LOJA (conectado via OAuth em
-      // Administrador > Pagamentos > Configurar recebimento PIX), em vez
-      // do token fixo do .env. Assim, o dinheiro cai direto na conta da
-      // loja logada, não na conta do desenvolvedor.
-      const configuracaoPagamento =
-        await buscarConfiguracaoPagamento('mercadopago');
-
-      const tokenMercadoPago = configuracaoPagamento?.accessToken;
-
-      if (!tokenMercadoPago) {
-        setPixErro(
-          'Nenhuma conta do Mercado Pago está conectada nesta loja.\n\n' +
-          'Vá em Administrador > Pagamentos > Configurar recebimento PIX ' +
-          'e conecte a conta do Mercado Pago antes de gerar cobranças.'
-        );
-        return;
-      }
-
-      // Guarda o token usado nesta cobrança, para que o polling e a
-      // verificação manual consultem sempre com o mesmo token.
-      tokenPixRef.current = tokenMercadoPago;
 
       // Nova cobrança PIX: reseta as travas/contadores para permitir
       // que o polling desta cobrança processe normalmente.
@@ -771,15 +843,22 @@ export default function Caixa({
       limparTimersPix();
 
       const emailCliente =
-        operador?.email ||
-        'cliente@vendaagil.com';
+        operador?.email || 'cliente@vendaagil.com';
+
+      const agoraMs = Date.now();
+      const expiraEm = agoraMs + TEMPO_EXPIRACAO_PIX_MS;
+
+      // date_of_expiration no formato exigido pelo Mercado Pago
+      // (ISO 8601 com offset, ex.: 2026-09-24T10:30:00.000-03:00).
+      // new Date().toISOString() usa "Z" (UTC), que a API também aceita.
+      const dataExpiracaoIso = new Date(expiraEm).toISOString();
 
       const resposta = await fetch(
         'https://api.mercadopago.com/v1/payments',
         {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${tokenMercadoPago}`,
+            Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
             'Content-Type': 'application/json',
             'X-Idempotency-Key': gerarIdempotencyKey(),
           },
@@ -787,10 +866,10 @@ export default function Caixa({
             transaction_amount: Number(total.toFixed(2)),
             description: 'Venda PDV - Venda Ágil',
             payment_method_id: 'pix',
+            date_of_expiration: dataExpiracaoIso,
             payer: {
               email: emailCliente,
-              first_name:
-                operador?.nome || 'Cliente',
+              first_name: operador?.nome || 'Cliente',
             },
             external_reference: `CAIXA-${Number(
               caixa?.id ?? 0
@@ -814,9 +893,7 @@ export default function Caixa({
           dados?.cause?.[0]?.description ||
           `Erro HTTP ${resposta.status}`;
 
-        throw new Error(
-          `Mercado Pago: ${mensagem}`
-        );
+        throw new Error(`Mercado Pago: ${mensagem}`);
       }
 
       if (!dados) {
@@ -825,10 +902,7 @@ export default function Caixa({
         );
       }
 
-      const mercadoPagoId =
-        dados.id ||
-        dados.payment_id ||
-        null;
+      const mercadoPagoId = dados.id || dados.payment_id || null;
 
       if (!mercadoPagoId) {
         throw new Error(
@@ -837,8 +911,7 @@ export default function Caixa({
       }
 
       const transactionData =
-        dados?.point_of_interaction
-          ?.transaction_data;
+        dados?.point_of_interaction?.transaction_data;
 
       const qrCode =
         transactionData?.qr_code ||
@@ -862,20 +935,19 @@ export default function Caixa({
         qr_code_base64: qrCodeBase64,
         copiaECola: qrCode,
         copyPaste: qrCode,
-        pointOfInteraction:
-          dados.point_of_interaction,
+        pointOfInteraction: dados.point_of_interaction,
         transactionData,
       };
 
       setPix(pixData);
 
+      // Contador regressivo + expiração automática do QR Code.
+      iniciarContadorPix(expiraEm);
+
       // Polling automático: consulta direto o Mercado Pago a cada 3s.
-      pixIntervalRef.current =
-        setInterval(async () => {
-          await verificarPagamentoPix(
-            String(mercadoPagoId)
-          );
-        }, 3000);
+      pixIntervalRef.current = setInterval(async () => {
+        await verificarPagamentoPix(String(mercadoPagoId));
+      }, 3000);
 
       // Depois de um tempo sem resposta, avisa o operador que ele
       // pode confirmar manualmente (o pagamento já pode ter sido
@@ -883,24 +955,16 @@ export default function Caixa({
       pixAvisoTimeoutRef.current = setTimeout(() => {
         setPixAvisoDemora(true);
       }, TEMPO_AVISO_DEMORA_MS);
-
     } catch (erro: any) {
-      setPixErro(
-        erro?.message ||
-          'Não foi possível gerar o PIX.'
-      );
+      setPixErro(erro?.message || 'Não foi possível gerar o PIX.');
     } finally {
       setPixCarregando(false);
     }
   }
 
   /**
-   * Consulta o status do pagamento DIRETO na API do Mercado Pago.
-   *
-   * Importante: como este app não tem backend próprio, não existe
-   * "/pagamentos/:id" para consultar — a verificação tem que ser
-   * feita aqui mesmo, contra a api.mercadopago.com, com o mesmo
-   * token usado para criar a cobrança.
+   * Consulta o status do pagamento DIRETO na API do Mercado Pago,
+   * usando o token fixo da conta única (MP_ACCESS_TOKEN).
    *
    * manual = true quando o operador aciona pelo botão "Já paguei,
    * verificar agora"; nesse caso mostramos feedback mesmo que o
@@ -912,18 +976,11 @@ export default function Caixa({
   ) {
     // Trava síncrona: se uma chamada anterior já está processando
     // (ou já processou) a aprovação desta cobrança, ignora esta execução.
-    // Isso evita que duas chamadas concorrentes finalizem a mesma venda
-    // duas vezes.
     if (pixProcessandoRef.current) {
       return;
     }
 
-    // Usa o mesmo token de Mercado Pago que foi usado para CRIAR esta
-    // cobrança (guardado em gerarPix), garantindo que a consulta é
-    // sempre feita contra a conta certa da loja.
-    const tokenMercadoPago = tokenPixRef.current;
-
-    if (!tokenMercadoPago) {
+    if (!MP_ACCESS_TOKEN) {
       return;
     }
 
@@ -937,7 +994,7 @@ export default function Caixa({
         {
           method: 'GET',
           headers: {
-            Authorization: `Bearer ${tokenMercadoPago}`,
+            Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
           },
         }
       );
@@ -965,9 +1022,7 @@ export default function Caixa({
       if (STATUS_FINAIS_ERRO.includes(status)) {
         limparTimersPix();
 
-        setPixErro(
-          `Pagamento PIX não aprovado. Status: ${status}`
-        );
+        setPixErro(`Pagamento PIX não aprovado. Status: ${status}`);
         return;
       }
 
@@ -988,10 +1043,7 @@ export default function Caixa({
 
         setPixPago(true);
 
-        await finalizarVendaLocal(
-          'pix',
-          mercadoPagoId
-        );
+        await finalizarVendaLocal('pix', mercadoPagoId);
         return;
       }
 
@@ -1002,10 +1054,7 @@ export default function Caixa({
         );
       }
     } catch (erro: any) {
-      console.error(
-        'ERRO AO CONSULTAR PAGAMENTO PIX:',
-        erro
-      );
+      console.error('ERRO AO CONSULTAR PAGAMENTO PIX:', erro);
 
       falhasConsultaRef.current += 1;
 
@@ -1065,9 +1114,7 @@ export default function Caixa({
         ).toLowerCase();
 
         const valor = dinheiro(linha.total);
-        const quantidade = Number(
-          linha.quantidade ?? 0
-        );
+        const quantidade = Number(linha.quantidade ?? 0);
 
         totalVendas += valor;
         quantidadeVendas += quantidade;
@@ -1082,9 +1129,7 @@ export default function Caixa({
       }
 
       const saldoInicial = dinheiro(
-        caixa?.saldoInicial ??
-          caixa?.saldo_inicial ??
-          0
+        caixa?.saldoInicial ?? caixa?.saldo_inicial ?? 0
       );
 
       const dinheiroEsperado = dinheiro(
@@ -1101,16 +1146,11 @@ export default function Caixa({
         dinheiroEsperado,
       });
 
-      setSaldoFinal(
-        dinheiro(dinheiroEsperado).toFixed(2)
-      );
+      setSaldoFinal(dinheiro(dinheiroEsperado).toFixed(2));
 
       setModalFechamento(true);
     } catch (erro) {
-      console.error(
-        'ERRO AO CARREGAR RESUMO LOCAL:',
-        erro
-      );
+      console.error('ERRO AO CARREGAR RESUMO LOCAL:', erro);
 
       Alert.alert(
         'Erro',
@@ -1124,9 +1164,7 @@ export default function Caixa({
       return;
     }
 
-    const contado = dinheiro(
-      saldoFinal.replace(',', '.')
-    );
+    const contado = dinheiro(saldoFinal.replace(',', '.'));
 
     const diferenca = dinheiro(
       contado - fechamento.dinheiroEsperado
@@ -1150,12 +1188,10 @@ export default function Caixa({
 
               const db = await obterBanco();
 
-              const agora =
-                new Date().toISOString();
+              const agora = new Date().toISOString();
 
-              const resultado =
-                await db.runAsync(
-                  `
+              const resultado = await db.runAsync(
+                `
                     UPDATE caixas_local
                     SET
                       saldo_final = ?,
@@ -1164,14 +1200,12 @@ export default function Caixa({
                       sincronizado = 0
                     WHERE id = ?
                   `,
-                  contado,
-                  agora,
-                  Number(caixa?.id ?? 0)
-                );
+                contado,
+                agora,
+                Number(caixa?.id ?? 0)
+              );
 
-              if (
-                Number(resultado.changes ?? 0) !== 1
-              ) {
+              if (Number(resultado.changes ?? 0) !== 1) {
                 throw new Error(
                   'Caixa não encontrado no banco local.'
                 );
@@ -1211,16 +1245,16 @@ export default function Caixa({
   function cancelarPix() {
     limparTimersPix();
 
-    // Cancelamento manual: libera a trava para uma eventual próxima cobrança
-    // e limpa o token usado, já que essa cobrança foi abandonada.
+    // Cancelamento manual: libera a trava para uma eventual próxima cobrança.
     pixProcessandoRef.current = false;
     falhasConsultaRef.current = 0;
-    tokenPixRef.current = null;
 
     setPix(null);
     setPixErro('');
     setPixPago(false);
     setPixAvisoDemora(false);
+    setPixExpiraEm(null);
+    setPixTempoRestante('');
   }
 
   function fecharCupom() {
@@ -1232,8 +1266,7 @@ export default function Caixa({
     pix?.qr_code ||
     pix?.copiaECola ||
     pix?.copyPaste ||
-    pix?.pointOfInteraction?.transactionData
-      ?.qrCode;
+    pix?.pointOfInteraction?.transactionData?.qrCode;
 
   return (
     <KeyboardAvoidingView
@@ -1279,25 +1312,16 @@ export default function Caixa({
           style={styles.botaoCamera}
           onPress={abrirCamera}
         >
-          <Text style={styles.cameraTexto}>
-            📷
-          </Text>
+          <Text style={styles.cameraTexto}>📷</Text>
         </TouchableOpacity>
       </View>
 
       {flashProduto && (
         <Animated.View
           pointerEvents="none"
-          style={[
-            styles.flash,
-            {
-              opacity: flashAnim,
-            },
-          ]}
+          style={[styles.flash, { opacity: flashAnim }]}
         >
-          <Text style={styles.flashTexto}>
-            ✓ Produto adicionado
-          </Text>
+          <Text style={styles.flashTexto}>✓ Produto adicionado</Text>
         </Animated.View>
       )}
 
@@ -1316,10 +1340,7 @@ export default function Caixa({
 
             {carregandoProdutos ? (
               <View style={styles.carregando}>
-                <ActivityIndicator
-                  size="large"
-                  color="#2563eb"
-                />
+                <ActivityIndicator size="large" color="#2563eb" />
 
                 <Text style={styles.carregandoTexto}>
                   Carregando produtos...
@@ -1332,18 +1353,11 @@ export default function Caixa({
                 showsVerticalScrollIndicator={true}
               >
                 {produtosFiltrados.map((produto) => {
-                  const estoque = numero(
-                    produto.quantidade
-                  );
+                  const estoque = numero(produto.quantidade);
 
                   return (
-                    <View
-                      key={produto.id}
-                      style={styles.cardProduto}
-                    >
-                      <View
-                        style={styles.infoProduto}
-                      >
+                    <View key={produto.id} style={styles.cardProduto}>
+                      <View style={styles.infoProduto}>
                         <Text
                           style={styles.nomeProduto}
                           numberOfLines={2}
@@ -1352,59 +1366,36 @@ export default function Caixa({
                         </Text>
 
                         {!!produto.marca && (
-                          <Text
-                            style={styles.marcaProduto}
-                          >
+                          <Text style={styles.marcaProduto}>
                             {produto.marca}
                           </Text>
                         )}
 
-                        <Text
-                          style={styles.codigoProduto}
-                        >
+                        <Text style={styles.codigoProduto}>
                           Cód.: {produto.codigo || '-'}
-                          {produto.ean
-                            ? ` • EAN: ${produto.ean}`
-                            : ''}
+                          {produto.ean ? ` • EAN: ${produto.ean}` : ''}
                         </Text>
 
-                        <Text
-                          style={styles.estoqueProduto}
-                        >
+                        <Text style={styles.estoqueProduto}>
                           Estoque: {fmt3(estoque)}{' '}
                           {produto.unidade || 'UN'}
                         </Text>
                       </View>
 
-                      <View
-                        style={styles.ladoProduto}
-                      >
-                        <Text
-                          style={styles.precoProduto}
-                        >
-                          {fmt(
-                            produto.precoVenda
-                          )}
+                      <View style={styles.ladoProduto}>
+                        <Text style={styles.precoProduto}>
+                          {fmt(produto.precoVenda)}
                         </Text>
 
                         <TouchableOpacity
                           style={[
                             styles.botaoAdicionar,
-                            estoque <= 0 &&
-                              styles.botaoDesabilitado,
+                            estoque <= 0 && styles.botaoDesabilitado,
                           ]}
                           disabled={estoque <= 0}
-                          onPress={() =>
-                            adicionarProduto(
-                              produto
-                            )
-                          }
+                          onPress={() => adicionarProduto(produto)}
                         >
-                          <Text
-                            style={
-                              styles.botaoAdicionarTexto
-                            }
-                          >
+                          <Text style={styles.botaoAdicionarTexto}>
                             {estoque <= 0
                               ? 'Sem estoque'
                               : 'Adicionar'}
@@ -1415,28 +1406,17 @@ export default function Caixa({
                   );
                 })}
 
-                {!produtosFiltrados.length &&
-                  !carregandoProdutos && (
-                    <View
-                      style={styles.vazioProdutos}
-                    >
-                      <Text
-                        style={
-                          styles.vazioProdutosTitulo
-                        }
-                      >
-                        Nenhum produto encontrado
-                      </Text>
+                {!produtosFiltrados.length && !carregandoProdutos && (
+                  <View style={styles.vazioProdutos}>
+                    <Text style={styles.vazioProdutosTitulo}>
+                      Nenhum produto encontrado
+                    </Text>
 
-                      <Text
-                        style={
-                          styles.vazioProdutosTexto
-                        }
-                      >
-                        Digite outro código, EAN ou nome.
-                      </Text>
-                    </View>
-                  )}
+                    <Text style={styles.vazioProdutosTexto}>
+                      Digite outro código, EAN ou nome.
+                    </Text>
+                  </View>
+                )}
               </ScrollView>
             )}
           </View>
@@ -1445,31 +1425,17 @@ export default function Caixa({
         <View style={styles.areaCarrinho}>
           <View style={styles.cabecalhoCarrinho}>
             <View>
-              <Text
-                style={styles.tituloCarrinho}
-              >
-                Carrinho
-              </Text>
+              <Text style={styles.tituloCarrinho}>Carrinho</Text>
 
-              <Text
-                style={styles.quantidadeCarrinho}
-              >
+              <Text style={styles.quantidadeCarrinho}>
                 {quantidadeItens}{' '}
-                {quantidadeItens === 1
-                  ? 'item'
-                  : 'itens'}
+                {quantidadeItens === 1 ? 'item' : 'itens'}
               </Text>
             </View>
 
             {carrinho.length > 0 && (
-              <TouchableOpacity
-                onPress={() => setCarrinho([])}
-              >
-                <Text
-                  style={styles.limparTexto}
-                >
-                  Limpar
-                </Text>
+              <TouchableOpacity onPress={() => setCarrinho([])}>
+                <Text style={styles.limparTexto}>Limpar</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -1480,84 +1446,40 @@ export default function Caixa({
             showsVerticalScrollIndicator={false}
           >
             {carrinho.map((item) => (
-              <View
-                key={item.produtoId}
-                style={styles.cardCarrinho}
-              >
-                <View
-                  style={styles.infoCarrinho}
-                >
-                  <Text
-                    style={styles.nomeCarrinho}
-                    numberOfLines={2}
-                  >
+              <View key={item.produtoId} style={styles.cardCarrinho}>
+                <View style={styles.infoCarrinho}>
+                  <Text style={styles.nomeCarrinho} numberOfLines={2}>
                     {item.nome}
                   </Text>
 
-                  <Text
-                    style={styles.precoUnitario}
-                  >
-                    {fmt(item.preco)} /{' '}
-                    {item.unidade}
+                  <Text style={styles.precoUnitario}>
+                    {fmt(item.preco)} / {item.unidade}
                   </Text>
 
-                  <Text
-                    style={styles.subtotal}
-                  >
-                    {fmt(
-                      item.preco *
-                        item.quantidade
-                    )}
+                  <Text style={styles.subtotal}>
+                    {fmt(item.preco * item.quantidade)}
                   </Text>
                 </View>
 
-                <View
-                  style={styles.controlesQuantidade}
-                >
+                <View style={styles.controlesQuantidade}>
                   <TouchableOpacity
-                    style={
-                      styles.botaoQuantidade
-                    }
-                    onPress={() =>
-                      diminuirQuantidade(
-                        item
-                      )
-                    }
+                    style={styles.botaoQuantidade}
+                    onPress={() => diminuirQuantidade(item)}
                   >
-                    <Text
-                      style={
-                        styles.botaoQuantidadeTexto
-                      }
-                    >
+                    <Text style={styles.botaoQuantidadeTexto}>
                       −
                     </Text>
                   </TouchableOpacity>
 
-                  <Text
-                    style={
-                      styles.quantidadeTexto
-                    }
-                  >
-                    {fmt3(
-                      item.quantidade
-                    )}
+                  <Text style={styles.quantidadeTexto}>
+                    {fmt3(item.quantidade)}
                   </Text>
 
                   <TouchableOpacity
-                    style={
-                      styles.botaoQuantidade
-                    }
-                    onPress={() =>
-                      aumentarQuantidade(
-                        item
-                      )
-                    }
+                    style={styles.botaoQuantidade}
+                    onPress={() => aumentarQuantidade(item)}
                   >
-                    <Text
-                      style={
-                        styles.botaoQuantidadeTexto
-                      }
-                    >
+                    <Text style={styles.botaoQuantidadeTexto}>
                       +
                     </Text>
                   </TouchableOpacity>
@@ -1565,46 +1487,23 @@ export default function Caixa({
 
                 <TouchableOpacity
                   style={styles.botaoExcluir}
-                  onPress={() =>
-                    removerItem(item)
-                  }
+                  onPress={() => removerItem(item)}
                 >
-                  <Text
-                    style={
-                      styles.botaoExcluirTexto
-                    }
-                  >
-                    🗑
-                  </Text>
+                  <Text style={styles.botaoExcluirTexto}>🗑</Text>
                 </TouchableOpacity>
               </View>
             ))}
 
             {!carrinho.length && (
-              <View
-                style={styles.carrinhoVazio}
-              >
-                <Text
-                  style={styles.carrinhoVazioIcone}
-                >
-                  🛒
-                </Text>
+              <View style={styles.carrinhoVazio}>
+                <Text style={styles.carrinhoVazioIcone}>🛒</Text>
 
-                <Text
-                  style={
-                    styles.carrinhoVazioTitulo
-                  }
-                >
+                <Text style={styles.carrinhoVazioTitulo}>
                   Carrinho vazio
                 </Text>
 
-                <Text
-                  style={
-                    styles.carrinhoVazioTexto
-                  }
-                >
-                  Adicione produtos para iniciar
-                  uma venda.
+                <Text style={styles.carrinhoVazioTexto}>
+                  Adicione produtos para iniciar uma venda.
                 </Text>
               </View>
             )}
@@ -1612,56 +1511,36 @@ export default function Caixa({
 
           <View style={styles.resumo}>
             <View style={styles.linhaResumo}>
-              <Text style={styles.labelResumo}>
-                Subtotal
-              </Text>
+              <Text style={styles.labelResumo}>Subtotal</Text>
 
-              <Text style={styles.valorResumo}>
-                {fmt(total)}
-              </Text>
+              <Text style={styles.valorResumo}>{fmt(total)}</Text>
             </View>
 
-            <View
-              style={styles.linhaTotal}
-            >
-              <Text style={styles.labelTotal}>
-                TOTAL
-              </Text>
+            <View style={styles.linhaTotal}>
+              <Text style={styles.labelTotal}>TOTAL</Text>
 
-              <Text style={styles.valorTotal}>
-                {fmt(total)}
-              </Text>
+              <Text style={styles.valorTotal}>{fmt(total)}</Text>
             </View>
           </View>
 
-          <View
-            style={styles.areaPagamento}
-          >
-            <Text
-              style={styles.tituloPagamento}
-            >
+          <View style={styles.areaPagamento}>
+            <Text style={styles.tituloPagamento}>
               Forma de pagamento
             </Text>
 
-            <View
-              style={styles.opcoesPagamento}
-            >
+            <View style={styles.opcoesPagamento}>
               <TouchableOpacity
                 style={[
                   styles.botaoPagamento,
-                  pagamento ===
-                    'dinheiro' &&
+                  pagamento === 'dinheiro' &&
                     styles.pagamentoSelecionado,
                 ]}
-                onPress={() =>
-                  setPagamento('dinheiro')
-                }
+                onPress={() => setPagamento('dinheiro')}
               >
                 <Text
                   style={[
                     styles.pagamentoTexto,
-                    pagamento ===
-                      'dinheiro' &&
+                    pagamento === 'dinheiro' &&
                       styles.pagamentoTextoSelecionado,
                   ]}
                 >
@@ -1675,9 +1554,7 @@ export default function Caixa({
                   pagamento === 'pix' &&
                     styles.pagamentoSelecionado,
                 ]}
-                onPress={() =>
-                  setPagamento('pix')
-                }
+                onPress={() => setPagamento('pix')}
               >
                 <Text
                   style={[
@@ -1689,58 +1566,59 @@ export default function Caixa({
                   📱 PIX
                 </Text>
               </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[
+                  styles.botaoPagamento,
+                  pagamento === 'outros' &&
+                    styles.pagamentoSelecionado,
+                ]}
+                onPress={() => setPagamento('outros')}
+              >
+                <Text
+                  style={[
+                    styles.pagamentoTexto,
+                    pagamento === 'outros' &&
+                      styles.pagamentoTextoSelecionado,
+                  ]}
+                >
+                  💳 Outros
+                </Text>
+              </TouchableOpacity>
             </View>
 
-            {pagamento ===
-              'dinheiro' && (
+            {pagamento === 'dinheiro' && (
               <View>
-                <Text
-                  style={
-                    styles.labelCampo
-                  }
-                >
-                  Valor recebido
-                </Text>
+                <Text style={styles.labelCampo}>Valor recebido</Text>
 
                 <TextInput
-                  style={
-                    styles.inputValor
-                  }
+                  style={styles.inputValor}
                   value={valorPago}
-                  onChangeText={
-                    setValorPago
-                  }
+                  onChangeText={setValorPago}
                   keyboardType="decimal-pad"
                   placeholder="0,00"
                   placeholderTextColor="#999"
                 />
 
-                {numero(valorPago) > 0 && numero(valorPago) < total && (
-                  <Text style={{ color: '#dc2626', fontSize: 12, fontWeight: '700', marginTop: 5 }}>
-                    ⚠️ O valor recebido é menor que o total (Falta {fmt(total - numero(valorPago))})
-                  </Text>
-                )}
+                {numero(valorPago) > 0 &&
+                  numero(valorPago) < total && (
+                    <Text
+                      style={{
+                        color: '#dc2626',
+                        fontSize: 12,
+                        fontWeight: '700',
+                        marginTop: 5,
+                      }}
+                    >
+                      ⚠️ O valor recebido é menor que o total
+                      (Falta {fmt(total - numero(valorPago))})
+                    </Text>
+                  )}
 
-                <View
-                  style={
-                    styles.areaTroco
-                  }
-                >
-                  <Text
-                    style={
-                      styles.labelTroco
-                    }
-                  >
-                    Troco
-                  </Text>
+                <View style={styles.areaTroco}>
+                  <Text style={styles.labelTroco}>Troco</Text>
 
-                  <Text
-                    style={
-                      styles.valorTroco
-                    }
-                  >
-                    {fmt(troco)}
-                  </Text>
+                  <Text style={styles.valorTroco}>{fmt(troco)}</Text>
                 </View>
 
                 <TouchableOpacity
@@ -1748,8 +1626,7 @@ export default function Caixa({
                     styles.botaoFinalizar,
                     (finalizando ||
                       !carrinho.length ||
-                      numero(valorPago) <
-                        total) &&
+                      numero(valorPago) < total) &&
                       styles.botaoDesabilitado,
                   ]}
                   disabled={
@@ -1757,22 +1634,12 @@ export default function Caixa({
                     !carrinho.length ||
                     numero(valorPago) < total
                   }
-                  onPress={() =>
-                    finalizarVendaLocal(
-                      'dinheiro'
-                    )
-                  }
+                  onPress={() => finalizarVendaLocal('dinheiro')}
                 >
                   {finalizando ? (
-                    <ActivityIndicator
-                      color="#fff"
-                    />
+                    <ActivityIndicator color="#fff" />
                   ) : (
-                    <Text
-                      style={
-                        styles.botaoFinalizarTexto
-                      }
-                    >
+                    <Text style={styles.botaoFinalizarTexto}>
                       Finalizar venda
                     </Text>
                   )}
@@ -1790,23 +1657,35 @@ export default function Caixa({
                     styles.botaoDesabilitado,
                 ]}
                 disabled={
-                  pixCarregando ||
-                  finalizando ||
-                  !carrinho.length
+                  pixCarregando || finalizando || !carrinho.length
                 }
                 onPress={gerarPix}
               >
                 {pixCarregando ? (
-                  <ActivityIndicator
-                    color="#fff"
-                  />
+                  <ActivityIndicator color="#fff" />
                 ) : (
-                  <Text
-                    style={
-                      styles.botaoFinalizarTexto
-                    }
-                  >
+                  <Text style={styles.botaoFinalizarTexto}>
                     Gerar PIX
+                  </Text>
+                )}
+              </TouchableOpacity>
+            )}
+
+            {pagamento === 'outros' && (
+              <TouchableOpacity
+                style={[
+                  styles.botaoFinalizar,
+                  (finalizando || !carrinho.length) &&
+                    styles.botaoDesabilitado,
+                ]}
+                disabled={finalizando || !carrinho.length}
+                onPress={() => finalizarVendaLocal('outros')}
+              >
+                {finalizando ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.botaoFinalizarTexto}>
+                    Finalizar venda
                   </Text>
                 )}
               </TouchableOpacity>
@@ -1838,42 +1717,24 @@ export default function Caixa({
                 'codabar',
               ],
             }}
-            onBarcodeScanned={({ data }) =>
-              processarCodigoLido(data)
-            }
+            onBarcodeScanned={({ data }) => processarCodigoLido(data)}
           />
 
-          <View
-            style={styles.cameraOverlay}
-          >
-            <View
-              style={styles.cameraTopo}
-            >
+          <View style={styles.cameraOverlay}>
+            <View style={styles.cameraTopo}>
               <TouchableOpacity
-                style={
-                  styles.botaoFecharCamera
-                }
+                style={styles.botaoFecharCamera}
                 onPress={fecharCamera}
               >
-                <Text
-                  style={
-                    styles.botaoFecharCameraTexto
-                  }
-                >
-                  ✕
-                </Text>
+                <Text style={styles.botaoFecharCameraTexto}>✕</Text>
               </TouchableOpacity>
 
-              <Text
-                style={styles.cameraTitulo}
-              >
+              <Text style={styles.cameraTitulo}>
                 Ler código de barras
               </Text>
             </View>
 
-            <View
-              style={styles.molduraScanner}
-            >
+            <View style={styles.molduraScanner}>
               <View
                 style={[
                   styles.cantoScanner,
@@ -1903,11 +1764,8 @@ export default function Caixa({
               />
             </View>
 
-            <Text
-              style={styles.cameraInstrucao}
-            >
-              Aponte a câmera para o código
-              de barras
+            <Text style={styles.cameraInstrucao}>
+              Aponte a câmera para o código de barras
             </Text>
           </View>
         </View>
@@ -1920,89 +1778,47 @@ export default function Caixa({
         animationType="fade"
         onRequestClose={cancelarPix}
       >
-        <View
-          style={styles.modalFundo}
-        >
+        <View style={styles.modalFundo}>
           <View style={styles.modalPix}>
-            <Text
-              style={styles.modalTitulo}
-            >
-              Pagamento PIX
-            </Text>
+            <Text style={styles.modalTitulo}>Pagamento PIX</Text>
 
-            <Text
-              style={styles.modalValor}
-            >
-              {fmt(total)}
-            </Text>
+            <Text style={styles.modalValor}>{fmt(total)}</Text>
 
             {pixErro ? (
-              <Text
-                style={styles.erroPix}
-              >
-                {pixErro}
-              </Text>
+              <Text style={styles.erroPix}>{pixErro}</Text>
             ) : pixPago ? (
-              <View
-                style={styles.pixAprovado}
-              >
-                <Text
-                  style={
-                    styles.pixAprovadoIcone
-                  }
-                >
-                  ✓
-                </Text>
+              <View style={styles.pixAprovado}>
+                <Text style={styles.pixAprovadoIcone}>✓</Text>
 
-                <Text
-                  style={
-                    styles.pixAprovadoTexto
-                  }
-                >
+                <Text style={styles.pixAprovadoTexto}>
                   Pagamento aprovado
                 </Text>
               </View>
             ) : (
               <>
                 {codigoPix ? (
-                  <View
-                    style={
-                      styles.qrContainer
-                    }
-                  >
-                    {String(
-                      codigoPix
-                    ).length < 5000 ? (
-                      <QRCode
-                        value={String(
-                          codigoPix
-                        )}
-                        size={220}
-                      />
+                  <View style={styles.qrContainer}>
+                    {String(codigoPix).length < 5000 ? (
+                      <QRCode value={String(codigoPix)} size={220} />
                     ) : (
-                      <Text
-                        style={
-                          styles.erroPix
-                        }
-                      >
+                      <Text style={styles.erroPix}>
                         QR Code indisponível
                       </Text>
                     )}
                   </View>
                 ) : (
-                  <ActivityIndicator
-                    size="large"
-                    color="#2563eb"
-                  />
+                  <ActivityIndicator size="large" color="#2563eb" />
                 )}
 
-                <Text
-                  style={
-                    styles.pixAguardando
-                  }
-                >
+                <Text style={styles.pixAguardando}>
                   Aguardando pagamento...
                 </Text>
+
+                {!!pixExpiraEm && !!pixTempoRestante && (
+                  <Text style={styles.pixExpiracaoTexto}>
+                    Expira em {pixTempoRestante}
+                  </Text>
+                )}
 
                 {pixAvisoDemora && (
                   <Text style={styles.pixAvisoDemoraTexto}>
@@ -2013,12 +1829,7 @@ export default function Caixa({
                 )}
 
                 {!!codigoPix && (
-                  <Text
-                    selectable
-                    style={
-                      styles.pixCopiaCola
-                    }
-                  >
+                  <Text selectable style={styles.pixCopiaCola}>
                     {String(codigoPix)}
                   </Text>
                 )}
@@ -2038,7 +1849,7 @@ export default function Caixa({
                       <ActivityIndicator color="#fff" />
                     ) : (
                       <Text style={styles.botaoVerificarPixTexto}>
-                        Aguadando pagamento....
+                        Já paguei, verificar agora
                       </Text>
                     )}
                   </TouchableOpacity>
@@ -2047,18 +1858,10 @@ export default function Caixa({
             )}
 
             <TouchableOpacity
-              style={
-                styles.botaoFecharModal
-              }
+              style={styles.botaoFecharModal}
               onPress={cancelarPix}
             >
-              <Text
-                style={
-                  styles.botaoFecharModalTexto
-                }
-              >
-                Fechar
-              </Text>
+              <Text style={styles.botaoFecharModalTexto}>Fechar</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -2117,7 +1920,9 @@ export default function Caixa({
               <View style={styles.linhaCupom}>
                 <Text style={styles.labelCupom}>Forma de Pagamento</Text>
                 <Text style={styles.valorCupom}>
-                  {vendaConcluida?.formaPagamento === 'pix' ? 'PIX' : 'Dinheiro'}
+                  {vendaConcluida
+                    ? nomeFormaPagamento(vendaConcluida.formaPagamento)
+                    : ''}
                 </Text>
               </View>
 
@@ -2155,153 +1960,65 @@ export default function Caixa({
         visible={modalFechamento}
         transparent
         animationType="slide"
-        onRequestClose={() =>
-          setModalFechamento(false)
-        }
+        onRequestClose={() => setModalFechamento(false)}
       >
-        <View
-          style={styles.modalFundo}
-        >
-          <View
-            style={styles.modalFechamento}
-          >
-            <ScrollView
-              showsVerticalScrollIndicator={
-                false
-              }
-            >
-              <Text
-                style={
-                  styles.modalTituloFechamento
-                }
-              >
+        <View style={styles.modalFundo}>
+          <View style={styles.modalFechamento}>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={styles.modalTituloFechamento}>
                 Encerrar caixa
               </Text>
 
               {fechamento && (
                 <>
-                  <View
-                    style={
-                      styles.cardResumoFechamento
-                    }
-                  >
-                    <View
-                      style={
-                        styles.linhaFechamento
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.labelFechamento
-                        }
-                      >
+                  <View style={styles.cardResumoFechamento}>
+                    <View style={styles.linhaFechamento}>
+                      <Text style={styles.labelFechamento}>
                         Saldo inicial
                       </Text>
 
-                      <Text
-                        style={
-                          styles.valorFechamento
-                        }
-                      >
-                        {fmt(
-                          fechamento.saldoInicial
-                        )}
+                      <Text style={styles.valorFechamento}>
+                        {fmt(fechamento.saldoInicial)}
                       </Text>
                     </View>
 
-                    <View
-                      style={
-                        styles.linhaFechamento
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.labelFechamento
-                        }
-                      >
+                    <View style={styles.linhaFechamento}>
+                      <Text style={styles.labelFechamento}>
                         Vendas em dinheiro
                       </Text>
 
-                      <Text
-                        style={
-                          styles.valorFechamento
-                        }
-                      >
-                        {fmt(
-                          fechamento.dinheiro
-                        )}
+                      <Text style={styles.valorFechamento}>
+                        {fmt(fechamento.dinheiro)}
                       </Text>
                     </View>
 
-                    <View
-                      style={
-                        styles.linhaFechamento
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.labelFechamento
-                        }
-                      >
+                    <View style={styles.linhaFechamento}>
+                      <Text style={styles.labelFechamento}>
                         Vendas PIX
                       </Text>
 
-                      <Text
-                        style={
-                          styles.valorFechamento
-                        }
-                      >
-                        {fmt(
-                          fechamento.pix
-                        )}
+                      <Text style={styles.valorFechamento}>
+                        {fmt(fechamento.pix)}
                       </Text>
                     </View>
 
-                    <View
-                      style={
-                        styles.linhaFechamento
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.labelFechamento
-                        }
-                      >
+                    <View style={styles.linhaFechamento}>
+                      <Text style={styles.labelFechamento}>
                         Outros
                       </Text>
 
-                      <Text
-                        style={
-                          styles.valorFechamento
-                        }
-                      >
-                        {fmt(
-                          fechamento.outros
-                        )}
+                      <Text style={styles.valorFechamento}>
+                        {fmt(fechamento.outros)}
                       </Text>
                     </View>
 
-                    <View
-                      style={
-                        styles.linhaFechamento
-                      }
-                    >
-                      <Text
-                        style={
-                          styles.labelFechamento
-                        }
-                      >
+                    <View style={styles.linhaFechamento}>
+                      <Text style={styles.labelFechamento}>
                         Quantidade de vendas
                       </Text>
 
-                      <Text
-                        style={
-                          styles.valorFechamento
-                        }
-                      >
-                        {
-                          fechamento.quantidadeVendas
-                        }
+                      <Text style={styles.valorFechamento}>
+                        {fechamento.quantidadeVendas}
                       </Text>
                     </View>
 
@@ -2311,86 +2028,44 @@ export default function Caixa({
                         styles.linhaTotalFechamento,
                       ]}
                     >
-                      <Text
-                        style={
-                          styles.labelTotalFechamento
-                        }
-                      >
+                      <Text style={styles.labelTotalFechamento}>
                         Total de vendas
                       </Text>
 
-                      <Text
-                        style={
-                          styles.valorTotalFechamento
-                        }
-                      >
-                        {fmt(
-                          fechamento.totalVendas
-                        )}
+                      <Text style={styles.valorTotalFechamento}>
+                        {fmt(fechamento.totalVendas)}
                       </Text>
                     </View>
                   </View>
 
-                  <Text
-                    style={
-                      styles.labelCampoFechamento
-                    }
-                  >
+                  <Text style={styles.labelCampoFechamento}>
                     Dinheiro esperado no caixa
                   </Text>
 
-                  <Text
-                    style={
-                      styles.valorEsperado
-                    }
-                  >
-                    {fmt(
-                      fechamento.dinheiroEsperado
-                    )}
+                  <Text style={styles.valorEsperado}>
+                    {fmt(fechamento.dinheiroEsperado)}
                   </Text>
 
-                  <Text
-                    style={
-                      styles.labelCampoFechamento
-                    }
-                  >
+                  <Text style={styles.labelCampoFechamento}>
                     Dinheiro contado
                   </Text>
 
                   <TextInput
-                    style={
-                      styles.inputFechamento
-                    }
+                    style={styles.inputFechamento}
                     value={saldoFinal}
-                    onChangeText={
-                      setSaldoFinal
-                    }
+                    onChangeText={setSaldoFinal}
                     keyboardType="decimal-pad"
                     placeholder="0,00"
                     placeholderTextColor="#999"
                   />
 
-                  <View
-                    style={
-                      styles.areaBotoesFechamento
-                    }
-                  >
+                  <View style={styles.areaBotoesFechamento}>
                     <TouchableOpacity
-                      style={
-                        styles.botaoCancelarFechamento
-                      }
-                      onPress={() =>
-                        setModalFechamento(
-                          false
-                        )
-                      }
+                      style={styles.botaoCancelarFechamento}
+                      onPress={() => setModalFechamento(false)}
                       disabled={encerrando}
                     >
-                      <Text
-                        style={
-                          styles.textoCancelarFechamento
-                        }
-                      >
+                      <Text style={styles.textoCancelarFechamento}>
                         Cancelar
                       </Text>
                     </TouchableOpacity>
@@ -2398,26 +2073,15 @@ export default function Caixa({
                     <TouchableOpacity
                       style={[
                         styles.botaoConfirmarFechamento,
-                        encerrando &&
-                          styles.botaoDesabilitado,
+                        encerrando && styles.botaoDesabilitado,
                       ]}
-                      onPress={
-                        confirmarEncerramento
-                      }
-                      disabled={
-                        encerrando
-                      }
+                      onPress={confirmarEncerramento}
+                      disabled={encerrando}
                     >
                       {encerrando ? (
-                        <ActivityIndicator
-                          color="#fff"
-                        />
+                        <ActivityIndicator color="#fff" />
                       ) : (
-                        <Text
-                          style={
-                            styles.textoConfirmarFechamento
-                          }
-                        >
+                        <Text style={styles.textoConfirmarFechamento}>
                           Encerrar caixa
                         </Text>
                       )}
@@ -3073,6 +2737,14 @@ const styles = StyleSheet.create({
     marginTop: 15,
     color: '#6b7280',
     fontSize: 13,
+    textAlign: 'center',
+  },
+
+  pixExpiracaoTexto: {
+    marginTop: 6,
+    color: '#374151',
+    fontSize: 13,
+    fontWeight: '800',
     textAlign: 'center',
   },
 

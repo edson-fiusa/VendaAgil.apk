@@ -689,14 +689,7 @@ export default function CadastroProduto() {
               <Text
                 style={styles.infoOfflineTitulo}
               >
-                Cadastro local
-              </Text>
-
-              <Text
-                style={styles.infoOfflineTexto}
-              >
-                O produto será salvo no aparelho
-                mesmo sem internet.
+                Cadastrado no Aparelho
               </Text>
             </View>
           </View>
