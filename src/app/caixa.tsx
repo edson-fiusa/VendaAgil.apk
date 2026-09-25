@@ -13,6 +13,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -74,12 +75,7 @@ type CaixaProps = {
 // MERCADO PAGO — TOKEN FIXO (UMA CONTA SÓ, SEM OAUTH POR LOJA)
 //
 // Configure no .env / app.config:
-//   EXPO_PUBLIC_MP_ACCESS_TOKEN=APP_USR-xxxxxxxx
-//
-// Esse token é o "Access Token" de PRODUÇÃO da conta do
-// Mercado Pago que vai RECEBER os pagamentos PIX gerados
-// pelo app. Não é o client_id/client_secret de OAuth — é só
-// isso, um token único usado por todas as lojas.
+//    EXPO_PUBLIC_MP_ACCESS_TOKEN=APP_USR-xxxxxxxx
 // ============================================================
 
 const MP_ACCESS_TOKEN = process.env
@@ -92,19 +88,9 @@ const STATUS_FINAIS_ERRO = [
   'charged_back',
 ];
 
-// Quantas falhas seguidas de consulta (rede, erro HTTP etc.) o polling
-// aceita antes de desistir de tentar sozinho e avisar o operador.
 const MAX_FALHAS_CONSULTA_PIX = 5;
-
-// Depois de quanto tempo sem confirmação avisamos o operador que pode
-// verificar manualmente (o botão "Já paguei" também fica disponível
-// desde o início, isso é só um aviso complementar).
-const TEMPO_AVISO_DEMORA_MS = 45_000;
-
-// Tempo de validade do QR Code do PIX. Depois desse prazo, o app para
-// de aceitar aquele QR Code (mesmo que o Mercado Pago ainda não tenha
-// expirado a cobrança) e pede pro operador gerar um novo.
-const TEMPO_EXPIRACAO_PIX_MS = 4 * 60 * 1000; // 10 minutos
+const TEMPO_AVISO_DEMORA_MS = 45000;
+const TEMPO_EXPIRACAO_PIX_MS = 10 * 60 * 800; // 4 minutos
 
 function formatarTempoRestante(ms: number): string {
   const totalSegundos = Math.max(0, Math.ceil(ms / 1000));
@@ -177,6 +163,21 @@ export default function Caixa({
   onLogout,
   toast,
 }: CaixaProps) {
+  const { width, height } = useWindowDimensions();
+
+  // Detecta tablet pela menor dimensão da tela (independente da orientação)
+  // e detecta paisagem comparando largura x altura. Isso garante que um
+  // tablet girado para retrato também seja tratado como tablet, e que um
+  // celular deitado (paisagem) também ganhe o layout de duas colunas.
+  const menorDimensao = Math.min(width, height);
+  const isTablet = menorDimensao >= 600;
+  const isPaisagem = width > height;
+  const isLandscapeOrTablet = isTablet || isPaisagem;
+
+  // Em tablets grandes na paisagem, mostramos o catálogo em grade
+  // (mais de uma coluna) para aproveitar melhor o espaço horizontal.
+  const colunasProdutos = isTablet && isPaisagem && width >= 900 ? 2 : 1;
+
   const [busca, setBusca] = useState('');
   const [produtos, setProdutos] = useState<Produto[]>([]);
   const [carrinho, setCarrinho] = useState<ItemCarrinho[]>([]);
@@ -221,8 +222,6 @@ export default function Caixa({
     null
   );
 
-  // Contador regressivo exibido no modal (atualiza a cada 1s) e o
-  // timeout que expira o PIX de fato quando o prazo acaba.
   const pixContadorIntervalRef = useRef<ReturnType<
     typeof setInterval
   > | null>(null);
@@ -231,12 +230,7 @@ export default function Caixa({
     typeof setTimeout
   > | null>(null);
 
-  // Trava síncrona (ref, não state) contra chamadas concorrentes do polling
-  // de PIX que poderiam finalizar a mesma venda mais de uma vez.
   const pixProcessandoRef = useRef(false);
-
-  // Conta falhas seguidas de consulta ao Mercado Pago (erro de rede, HTTP,
-  // resposta inesperada). Zera sempre que uma consulta funciona.
   const falhasConsultaRef = useRef(0);
 
   function limparTimersPix() {
@@ -263,14 +257,14 @@ export default function Caixa({
 
   function expirarPix() {
     limparTimersPix();
-
     pixProcessandoRef.current = false;
-
     setPixExpiraEm(null);
     setPixTempoRestante('');
-    setPixErro(
-      'O QR Code expirou sem confirmação de pagamento. Gere um novo PIX.'
-    );
+    setPixError('O QR Code expirou sem confirmação de pagamento. Gere um novo PIX.');
+  }
+
+  function setPixError(msg: string) {
+    setPixErro(msg);
   }
 
   function iniciarContadorPix(expiraEm: number) {
@@ -358,6 +352,10 @@ export default function Caixa({
   const produtosFiltrados = useMemo(() => {
     const termo = busca.trim().toLowerCase();
 
+    if (!termo && isLandscapeOrTablet) {
+      return produtos.slice(0, 100);
+    }
+
     if (!termo) {
       return [];
     }
@@ -383,7 +381,7 @@ export default function Caixa({
         );
       })
       .slice(0, 100);
-  }, [busca, produtos]);
+  }, [busca, produtos, isLandscapeOrTablet]);
 
   const total = useMemo(() => {
     return dinheiro(
@@ -469,7 +467,9 @@ export default function Caixa({
       ];
     });
 
-    setBusca('');
+    if (!isLandscapeOrTablet) {
+      setBusca('');
+    }
     mostrarFlash();
   }
 
@@ -801,14 +801,11 @@ export default function Caixa({
           'ter sido aprovado no Mercado Pago: confira lá antes de tentar novamente.'
       );
 
-      // Se a venda falhou ao gravar localmente (ex.: estoque insuficiente
-      // detectado só aqui), libera a trava de PIX para permitir nova tentativa
-      // manual, em vez de deixar o operador travado com pixProcessandoRef=true.
       pixProcessandoRef.current = false;
     } finally {
       setFinalizando(false);
     }
-  }
+}
 
   async function gerarPix() {
     if (!carrinho.length) {
@@ -835,8 +832,6 @@ export default function Caixa({
       setPixPago(false);
       setPixAvisoDemora(false);
 
-      // Nova cobrança PIX: reseta as travas/contadores para permitir
-      // que o polling desta cobrança processe normalmente.
       pixProcessandoRef.current = false;
       falhasConsultaRef.current = 0;
 
@@ -847,10 +842,6 @@ export default function Caixa({
 
       const agoraMs = Date.now();
       const expiraEm = agoraMs + TEMPO_EXPIRACAO_PIX_MS;
-
-      // date_of_expiration no formato exigido pelo Mercado Pago
-      // (ISO 8601 com offset, ex.: 2026-09-24T10:30:00.000-03:00).
-      // new Date().toISOString() usa "Z" (UTC), que a API também aceita.
       const dataExpiracaoIso = new Date(expiraEm).toISOString();
 
       const resposta = await fetch(
@@ -940,18 +931,12 @@ export default function Caixa({
       };
 
       setPix(pixData);
-
-      // Contador regressivo + expiração automática do QR Code.
       iniciarContadorPix(expiraEm);
 
-      // Polling automático: consulta direto o Mercado Pago a cada 3s.
       pixIntervalRef.current = setInterval(async () => {
         await verificarPagamentoPix(String(mercadoPagoId));
       }, 3000);
 
-      // Depois de um tempo sem resposta, avisa o operador que ele
-      // pode confirmar manualmente (o pagamento já pode ter sido
-      // aprovado do lado do Mercado Pago).
       pixAvisoTimeoutRef.current = setTimeout(() => {
         setPixAvisoDemora(true);
       }, TEMPO_AVISO_DEMORA_MS);
@@ -962,20 +947,10 @@ export default function Caixa({
     }
   }
 
-  /**
-   * Consulta o status do pagamento DIRETO na API do Mercado Pago,
-   * usando o token fixo da conta única (MP_ACCESS_TOKEN).
-   *
-   * manual = true quando o operador aciona pelo botão "Já paguei,
-   * verificar agora"; nesse caso mostramos feedback mesmo que o
-   * status ainda esteja pendente.
-   */
   async function verificarPagamentoPix(
     mercadoPagoId: string,
     manual: boolean = false
   ) {
-    // Trava síncrona: se uma chamada anterior já está processando
-    // (ou já processou) a aprovação desta cobrança, ignora esta execução.
     if (pixProcessandoRef.current) {
       return;
     }
@@ -1014,15 +989,13 @@ export default function Caixa({
         );
       }
 
-      // Consulta funcionou: zera o contador de falhas.
       falhasConsultaRef.current = 0;
 
       const status = String(dados?.status ?? '').toLowerCase();
 
       if (STATUS_FINAIS_ERRO.includes(status)) {
         limparTimersPix();
-
-        setPixErro(`Pagamento PIX não aprovado. Status: ${status}`);
+        setPixError(`Pagamento PIX não aprovado. Status: ${status}`);
         return;
       }
 
@@ -1031,8 +1004,6 @@ export default function Caixa({
         status === 'paid' ||
         status === 'authorized'
       ) {
-        // Checagem dupla logo antes de travar, para fechar a janela de
-        // corrida entre o "if" de fora e este ponto.
         if (pixProcessandoRef.current) {
           return;
         }
@@ -1040,14 +1011,12 @@ export default function Caixa({
         pixProcessandoRef.current = true;
 
         limparTimersPix();
-
         setPixPago(true);
 
         await finalizarVendaLocal('pix', mercadoPagoId);
         return;
       }
 
-      // Ainda pendente.
       if (manual) {
         mostrarToast(
           'Pagamento ainda não foi confirmado pelo Mercado Pago. Aguarde alguns segundos e tente de novo.'
@@ -1064,17 +1033,13 @@ export default function Caixa({
         );
       }
 
-      // Depois de várias falhas seguidas, para de tentar sozinho e
-      // avisa claramente o operador em vez de ficar girando pra sempre.
       if (falhasConsultaRef.current >= MAX_FALHAS_CONSULTA_PIX) {
         limparTimersPix();
-
-        setPixErro(
+        setPixError(
           'Não foi possível confirmar automaticamente o pagamento PIX ' +
           '(falha ao consultar o Mercado Pago repetidamente).\n\n' +
           'Verifique o status desse pagamento no aplicativo/site do ' +
-          'Mercado Pago antes de repetir a cobrança, para não cobrar o ' +
-          'cliente duas vezes.'
+          'Mercado Pago antes de repetir a cobrança.'
         );
       }
     } finally {
@@ -1147,7 +1112,6 @@ export default function Caixa({
       });
 
       setSaldoFinal(dinheiro(dinheiroEsperado).toFixed(2));
-
       setModalFechamento(true);
     } catch (erro) {
       console.error('ERRO AO CARREGAR RESUMO LOCAL:', erro);
@@ -1187,7 +1151,6 @@ export default function Caixa({
               setEncerrando(true);
 
               const db = await obterBanco();
-
               const agora = new Date().toISOString();
 
               const resultado = await db.runAsync(
@@ -1244,8 +1207,6 @@ export default function Caixa({
 
   function cancelarPix() {
     limparTimersPix();
-
-    // Cancelamento manual: libera a trava para uma eventual próxima cobrança.
     pixProcessandoRef.current = false;
     falhasConsultaRef.current = 0;
 
@@ -1325,12 +1286,13 @@ export default function Caixa({
         </Animated.View>
       )}
 
-      <View style={styles.conteudo}>
-        {busca.trim() !== '' && (
-          <View style={styles.areaProdutos}>
+      {/* CONTEÚDO PRINCIPAL (ADAPTADO PARA TABLET / PAISAGEM / RETRATO) */}
+      <View style={[styles.conteudo, isLandscapeOrTablet && styles.conteudoLandscape]}>
+        {(isLandscapeOrTablet || busca.trim() !== '') && (
+          <View style={[styles.areaProdutos, isLandscapeOrTablet && styles.areaProdutosLandscape]}>
             <View style={styles.tituloSecao}>
               <Text style={styles.tituloSecaoTexto}>
-                Produtos encontrados
+                {isLandscapeOrTablet && !busca.trim() ? 'Catálogo de Produtos' : 'Produtos encontrados'}
               </Text>
 
               <Text style={styles.contadorProdutos}>
@@ -1348,7 +1310,12 @@ export default function Caixa({
               </View>
             ) : (
               <ScrollView
-                style={styles.listaProdutos}
+                style={[styles.listaProdutos, isLandscapeOrTablet && styles.listaProdutosLandscape]}
+                contentContainerStyle={
+                  colunasProdutos > 1
+                    ? styles.gradeProdutosContainer
+                    : undefined
+                }
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator={true}
               >
@@ -1356,7 +1323,13 @@ export default function Caixa({
                   const estoque = numero(produto.quantidade);
 
                   return (
-                    <View key={produto.id} style={styles.cardProduto}>
+                    <View
+                      key={produto.id}
+                      style={[
+                        styles.cardProduto,
+                        colunasProdutos > 1 && styles.cardProdutoGrade,
+                      ]}
+                    >
                       <View style={styles.infoProduto}>
                         <Text
                           style={styles.nomeProduto}
@@ -1422,7 +1395,7 @@ export default function Caixa({
           </View>
         )}
 
-        <View style={styles.areaCarrinho}>
+        <View style={[styles.areaCarrinho, isLandscapeOrTablet && styles.areaCarrinhoLandscape]}>
           <View style={styles.cabecalhoCarrinho}>
             <View>
               <Text style={styles.tituloCarrinho}>Carrinho</Text>
@@ -2194,6 +2167,11 @@ const styles = StyleSheet.create({
 
   conteudo: {
     flex: 1,
+    flexDirection: 'column',
+  },
+
+  conteudoLandscape: {
+    flexDirection: 'row',
   },
 
   areaProdutos: {
@@ -2201,6 +2179,14 @@ const styles = StyleSheet.create({
     maxHeight: 230,
     borderBottomWidth: 1,
     borderBottomColor: '#d1d5db',
+  },
+
+  areaProdutosLandscape: {
+    flex: 1.15,
+    maxHeight: undefined,
+    borderBottomWidth: 0,
+    borderRightWidth: 1,
+    borderRightColor: '#d1d5db',
   },
 
   tituloSecao: {
@@ -2235,6 +2221,11 @@ const styles = StyleSheet.create({
     maxHeight: 175,
   },
 
+  listaProdutosLandscape: {
+    maxHeight: undefined,
+    flex: 1,
+  },
+
   cardProduto: {
     backgroundColor: '#fff',
     borderRadius: 11,
@@ -2244,6 +2235,16 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     borderWidth: 1,
     borderColor: '#e5e7eb',
+  },
+
+  gradeProdutosContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+
+  cardProdutoGrade: {
+    width: '49%',
   },
 
   infoProduto: {
@@ -2337,6 +2338,12 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#d1d5db',
     minHeight: 0,
+  },
+
+  areaCarrinhoLandscape: {
+    flex: 0.85,
+    maxWidth: 420,
+    borderTopWidth: 0,
   },
 
   cabecalhoCarrinho: {

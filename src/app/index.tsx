@@ -13,6 +13,7 @@ import {
   TextInput,
   TouchableOpacity,
   View,
+  useWindowDimensions,
 } from 'react-native';
 
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -78,6 +79,16 @@ type TelaAdmin =
 // ============================================================
 
 export default function Index() {
+  // ============================================================
+  // RESPONSIVIDADE (TELAS MAIORES / TABLET / ORIENTAÇÃO DEITADA)
+  // ============================================================
+
+  const { width, height } = useWindowDimensions();
+  const menorDimensaoTela = Math.min(width, height);
+  const isTablet = menorDimensaoTela >= 600;
+  const isPaisagem = width > height;
+  const isTabletOuPaisagem = isTablet || isPaisagem;
+
   const [tela, setTela] = useState<Tela>('login');
 
   const [telaLogin, setTelaLogin] =
@@ -777,7 +788,12 @@ export default function Index() {
             keyboardDismissMode="on-drag"
             showsVerticalScrollIndicator={false}
           >
-            <View style={styles.loginCard}>
+            <View
+              style={[
+                styles.loginCard,
+                isTabletOuPaisagem && styles.loginCardTablet,
+              ]}
+            >
               <Text style={styles.bloqueioIcone}>
                 🔒
               </Text>
@@ -869,13 +885,19 @@ export default function Index() {
               <View style={styles.logoArea}>
                 <Image
                   source={require('./img/icon.png')}
-                  style={styles.logoAdmin}
+                  style={[
+                    styles.logoAdmin,
+                    isTabletOuPaisagem && styles.logoAdminTablet,
+                  ]}
                   resizeMode="contain"
                 />
               </View>
 
               <View
-                style={styles.loginCard}
+                style={[
+                  styles.loginCard,
+                  isTabletOuPaisagem && styles.loginCardTablet,
+                ]}
               >
                 <Text
                   style={styles.loginTitulo}
@@ -883,63 +905,73 @@ export default function Index() {
                   Acesso ao sistema
                 </Text>
 
-                <TouchableOpacity
-                  style={[
-                    styles.botaoPrincipal,
-                    !bancoPronto &&
-                      styles.botaoDesabilitado,
-                  ]}
-                  onPress={() =>
-                    setTelaLogin('admin')
+                <View
+                  style={
+                    isPaisagem
+                      ? styles.opcoesEscolhaPaisagem
+                      : undefined
                   }
-                  disabled={!bancoPronto}
                 >
-                  <Text
-                    style={
-                      styles.botaoPrincipalTexto
+                  <TouchableOpacity
+                    style={[
+                      styles.botaoPrincipal,
+                      isPaisagem && styles.botaoEscolhaPaisagem,
+                      !bancoPronto &&
+                        styles.botaoDesabilitado,
+                    ]}
+                    onPress={() =>
+                      setTelaLogin('admin')
                     }
+                    disabled={!bancoPronto}
                   >
-                    Administrador
-                  </Text>
+                    <Text
+                      style={
+                        styles.botaoPrincipalTexto
+                      }
+                    >
+                      Administrador
+                    </Text>
 
-                  <Text
-                    style={
-                      styles.botaoDescricao
-                    }
-                  >
-                    Produtos, operadores,
-                    avarias, relatórios e
-                    backup
-                  </Text>
-                </TouchableOpacity>
+                    <Text
+                      style={
+                        styles.botaoDescricao
+                      }
+                    >
+                      Produtos, operadores,
+                      avarias, relatórios e
+                      backup
+                    </Text>
+                  </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={[
-                    styles.botaoSecundario,
-                    !bancoPronto &&
-                      styles.botaoDesabilitado,
-                  ]}
-                  onPress={() =>
-                    setTelaLogin('caixa')
-                  }
-                  disabled={!bancoPronto}
-                >
-                  <Text
-                    style={
-                      styles.botaoSecundarioTexto
+                  <TouchableOpacity
+                    style={[
+                      styles.botaoSecundario,
+                      isPaisagem && styles.botaoEscolhaPaisagem,
+                      !bancoPronto &&
+                        styles.botaoDesabilitado,
+                    ]}
+                    onPress={() =>
+                      setTelaLogin('caixa')
                     }
+                    disabled={!bancoPronto}
                   >
-                    Operador de Caixa
-                  </Text>
+                    <Text
+                      style={
+                        styles.botaoSecundarioTexto
+                      }
+                    >
+                      Operador de Caixa
+                    </Text>
 
-                  <Text
-                    style={
-                      styles.botaoDescricaoEscuro
-                    }
-                  >
-                    Acessar o PDV
-                  </Text>
-                </TouchableOpacity>
+                    <Text
+                      style={
+                        styles.botaoDescricaoEscuro
+                      }
+                    >
+                      Acessar o PDV
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </ScrollView>
           </KeyboardAvoidingView>
@@ -1043,7 +1075,10 @@ export default function Index() {
             }
           >
             <View
-              style={styles.loginCard}
+              style={[
+                styles.loginCard,
+                isTabletOuPaisagem && styles.loginCardTablet,
+              ]}
             >
               <TouchableOpacity
                 onPress={() =>
@@ -1269,9 +1304,10 @@ export default function Index() {
     return (
       <SafeAreaView style={styles.container}>
         <ScrollView
-          contentContainerStyle={
-            styles.adminContainer
-          }
+          contentContainerStyle={[
+            styles.adminContainer,
+            isTabletOuPaisagem && styles.adminContainerTablet,
+          ]}
         >
           <View
             style={styles.adminCabecalho}
@@ -1304,25 +1340,39 @@ export default function Index() {
             Produtos
           </Text>
 
-          <MenuButton
-            title="Cadastrar produtos"
-            description="Cadastrar produtos novos ou ainda não cadastrados"
-            onPress={() =>
-              setTelaAdmin(
-                'cadastroProduto'
-              )
+          <View
+            style={
+              isTabletOuPaisagem
+                ? styles.gradeMenu
+                : undefined
             }
-          />
+          >
+            <MenuButton
+              title="Cadastrar produtos"
+              description="Cadastrar produtos novos ou ainda não cadastrados"
+              style={
+                isTabletOuPaisagem && styles.menuButtonGrade
+              }
+              onPress={() =>
+                setTelaAdmin(
+                  'cadastroProduto'
+                )
+              }
+            />
 
-          <MenuButton
-            title="Gerenciar produtos"
-            description="Visualizar, editar e excluir produtos"
-            onPress={() =>
-              setTelaAdmin(
-                'gerenciarProdutos'
-              )
-            }
-          />
+            <MenuButton
+              title="Gerenciar produtos"
+              description="Visualizar, editar e excluir produtos"
+              style={
+                isTabletOuPaisagem && styles.menuButtonGrade
+              }
+              onPress={() =>
+                setTelaAdmin(
+                  'gerenciarProdutos'
+                )
+              }
+            />
+          </View>
 
           {/* ADMINISTRAÇÃO */}
 
@@ -1332,23 +1382,37 @@ export default function Index() {
             Administração
           </Text>
 
-          <MenuButton
-            title="Gerenciar operadores"
-            description="Adicionar e gerenciar operadores do caixa"
-            onPress={() =>
-              setTelaAdmin(
-                'gerenciarOperadores'
-              )
+          <View
+            style={
+              isTabletOuPaisagem
+                ? styles.gradeMenu
+                : undefined
             }
-          />
+          >
+            <MenuButton
+              title="Gerenciar operadores"
+              description="Adicionar e gerenciar operadores do caixa"
+              style={
+                isTabletOuPaisagem && styles.menuButtonGrade
+              }
+              onPress={() =>
+                setTelaAdmin(
+                  'gerenciarOperadores'
+                )
+              }
+            />
 
-          <MenuButton
-            title="Avarias"
-            description="Registrar perdas e produtos danificados"
-            onPress={() =>
-              setTelaAdmin('avarias')
-            }
-          />
+            <MenuButton
+              title="Avarias"
+              description="Registrar perdas e produtos danificados"
+              style={
+                isTabletOuPaisagem && styles.menuButtonGrade
+              }
+              onPress={() =>
+                setTelaAdmin('avarias')
+              }
+            />
+          </View>
 
           {/* INTELIGÊNCIA */}
 
@@ -1392,29 +1456,46 @@ export default function Index() {
             Sistema
           </Text>
 
-          <MenuButton
-            title="💾 Backup e restauração"
-            description="Fazer backup semanal ou restaurar o último backup salvo"
-            onPress={() =>
-              setTelaAdmin('backup')
+          <View
+            style={
+              isTabletOuPaisagem
+                ? styles.gradeMenu
+                : undefined
             }
-          />
+          >
+            <MenuButton
+              title="💾 Backup e restauração"
+              description="Fazer backup semanal ou restaurar o último backup salvo"
+              style={
+                isTabletOuPaisagem && styles.menuButtonGrade
+              }
+              onPress={() =>
+                setTelaAdmin('backup')
+              }
+            />
 
-          <MenuButton
-            title="🔑 Trocar senha"
-            description="Alterar usuário e senha do administrador"
-            onPress={() =>
-              setTelaAdmin('trocarSenha')
-            }
-          />
+            <MenuButton
+              title="🔑 Trocar senha"
+              description="Alterar usuário e senha do administrador"
+              style={
+                isTabletOuPaisagem && styles.menuButtonGrade
+              }
+              onPress={() =>
+                setTelaAdmin('trocarSenha')
+              }
+            />
 
-          <MenuButton
-            title="📋 Log de atividades"
-            description="Ver histórico de logins, cadastros, vendas e outras ações"
-            onPress={() =>
-              setTelaAdmin('logAtividades')
-            }
-          />
+            <MenuButton
+              title="📋 Log de atividades"
+              description="Ver histórico de logins, cadastros, vendas e outras ações"
+              style={
+                isTabletOuPaisagem && styles.menuButtonGrade
+              }
+              onPress={() =>
+                setTelaAdmin('logAtividades')
+              }
+            />
+          </View>
         </ScrollView>
       </SafeAreaView>
     );
@@ -1447,14 +1528,16 @@ function MenuButton({
   title,
   description,
   onPress,
+  style,
 }: {
   title: string;
   description: string;
   onPress: () => void;
+  style?: any;
 }) {
   return (
     <TouchableOpacity
-      style={styles.menuButton}
+      style={[styles.menuButton, style]}
       onPress={onPress}
     >
       <Text
@@ -1506,11 +1589,37 @@ const styles = StyleSheet.create({
     height: 300,
   },
 
+  logoAdminTablet: {
+    width: 220,
+    height: 220,
+  },
+
   loginCard: {
     backgroundColor: '#fff',
     borderRadius: 18,
     padding: 20,
     elevation: 4,
+  },
+
+  // Em tablets e na orientação deitada, o card de login/menu fica
+  // limitado em largura e centralizado, em vez de esticar até as
+  // bordas da tela.
+  loginCardTablet: {
+    width: '100%',
+    maxWidth: 480,
+    alignSelf: 'center',
+  },
+
+  // Na paisagem, os dois botões de "Administrador" / "Operador de
+  // Caixa" ficam lado a lado em vez de empilhados.
+  opcoesEscolhaPaisagem: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+
+  botaoEscolhaPaisagem: {
+    flex: 1,
+    marginBottom: 0,
   },
 
   loginTitulo: {
@@ -1642,6 +1751,27 @@ const styles = StyleSheet.create({
   adminContainer: {
     padding: 18,
     paddingBottom: 40,
+  },
+
+  // Em tablets/paisagem, o conteúdo do painel fica centralizado
+  // e com largura máxima, para não esticar demais em telas largas.
+  adminContainerTablet: {
+    width: '100%',
+    maxWidth: 900,
+    alignSelf: 'center',
+    paddingHorizontal: 24,
+  },
+
+  // Grade de 2 colunas para os botões do menu administrativo em
+  // telas maiores / deitadas.
+  gradeMenu: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+
+  menuButtonGrade: {
+    width: '48.5%',
   },
 
   adminCabecalho: {
