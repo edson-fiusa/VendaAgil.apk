@@ -7,6 +7,12 @@
     "icon": "./src/app/img/icon.png",
     "scheme": "vendaagil",
     "userInterfaceStyle": "automatic",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/c2c0c2f6-576d-4b92-bbdb-e1488e968777"
+    },
     "ios": {
       "icon": "./assets/expo.icon",
       "infoPlist": {
@@ -61,7 +67,8 @@
       ],
       "expo-sqlite",
       "expo-sharing",
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-updates"
     ],
     "experiments": {
       "typedRoutes": true,

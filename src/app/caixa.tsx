@@ -92,6 +92,11 @@ const MAX_FALHAS_CONSULTA_PIX = 5;
 const TEMPO_AVISO_DEMORA_MS = 45000;
 const TEMPO_EXPIRACAO_PIX_MS = 10 * 60 * 800; // 4 minutos
 
+// Quantidade máxima de itens detalhados no QR Code da nota. Como o QR
+// tem capacidade limitada, carrinhos maiores que isso são resumidos
+// para o QR não ficar denso demais para escanear.
+const MAX_ITENS_QR_CUPOM = 12;
+
 function formatarTempoRestante(ms: number): string {
   const totalSegundos = Math.max(0, Math.ceil(ms / 1000));
   const minutos = Math.floor(totalSegundos / 60);
@@ -155,6 +160,48 @@ function nomeFormaPagamento(forma: FormaPagamento): string {
   if (forma === 'pix') return 'PIX';
   if (forma === 'outros') return 'Outros';
   return 'Dinheiro';
+}
+
+// Monta o texto que vai dentro do QR Code do cupom. Como o app não tem
+// servidor, o QR carrega o conteúdo da nota em texto puro: a maioria
+// dos apps de câmera (iOS/Android) já mostra esse texto decodificado
+// na tela de quem escaneia, sem precisar abrir nada.
+function montarTextoQrCupom(venda: VendaConcluida): string {
+  const itensParaExibir = venda.itens.slice(0, MAX_ITENS_QR_CUPOM);
+  const itensOmitidos = venda.itens.length > MAX_ITENS_QR_CUPOM;
+
+  const linhasItens = itensParaExibir
+    .map(
+      (item) =>
+        `${fmt3(item.quantidade)} ${item.unidade} - ${item.nome}\n` +
+        `  ${fmt(item.preco)} x ${fmt3(item.quantidade)} = ${fmt(
+          item.preco * item.quantidade
+        )}`
+    )
+    .join('\n');
+
+  let texto =
+    `VENDA AGIL PDV\n` +
+    `Venda #${venda.id} - ${venda.data}\n\n` +
+    linhasItens;
+
+  if (itensOmitidos) {
+    texto += `\n... e mais ${
+      venda.itens.length - MAX_ITENS_QR_CUPOM
+    } item(ns)`;
+  }
+
+  texto += `\n\nTOTAL: ${fmt(venda.total)}\n`;
+  texto += `Pagamento: ${nomeFormaPagamento(venda.formaPagamento)}`;
+
+  if (venda.formaPagamento === 'dinheiro') {
+    texto += `\nRecebido: ${fmt(venda.valorRecebido)}`;
+    texto += `\nTroco: ${fmt(venda.troco)}`;
+  }
+
+  texto += `\n\nObrigado pela preferencia!`;
+
+  return texto;
 }
 
 export default function Caixa({
@@ -1850,13 +1897,12 @@ export default function Caixa({
         <View style={styles.modalFundo}>
           <View style={styles.modalCupom}>
             <Text style={styles.cupomTitulo}>VENDA ÁGIL PDV</Text>
-            <Text style={styles.cupomSubtitulo}>CNPJ: 00.000.000/0001-00</Text>
-            <Text style={styles.cupomEndereco}>Comprovante de Venda / Extrato</Text>
+            <Text style={styles.cupomEndereco}>Extrato da Venda</Text>
 
             <View style={styles.linhaSeparadorDashed} />
 
             <View style={styles.cupomInfoGeral}>
-              <Text style={styles.cupomTextoInfo}>Venda: #{vendaConcluida?.id}</Text>
+              <Text style={styles.cupomTextoInfo}>Data a Hora da Venda</Text>
               <Text style={styles.cupomTextoInfo}>{vendaConcluida?.data}</Text>
             </View>
 
@@ -1912,6 +1958,24 @@ export default function Caixa({
                 </>
               )}
             </View>
+
+            <View style={styles.linhaSeparadorDashed} />
+
+            {/* QR Code com o conteúdo da nota, para o cliente escanear
+                e visualizar no próprio celular (funciona sem servidor:
+                o texto vai embutido direto no QR). */}
+            {vendaConcluida && (
+              <View style={styles.cupomQrContainer}>
+                <QRCode
+                  value={montarTextoQrCupom(vendaConcluida)}
+                  size={150}
+                />
+
+                <Text style={styles.cupomQrLegenda}>
+                  Escaneie para ver a nota no seu celular
+                </Text>
+              </View>
+            )}
 
             <View style={styles.linhaSeparadorDashed} />
 
@@ -2969,6 +3033,18 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '900',
     color: '#2563eb',
+  },
+
+  cupomQrContainer: {
+    alignItems: 'center',
+    marginVertical: 4,
+  },
+
+  cupomQrLegenda: {
+    marginTop: 6,
+    fontSize: 10,
+    color: '#6b7280',
+    textAlign: 'center',
   },
 
   cupomRodape: {

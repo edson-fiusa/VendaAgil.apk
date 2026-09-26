@@ -17,9 +17,6 @@ import {
   obterLogs,
 } from '../seguranca/log';
 
-// ============================================================
-// RÓTULOS DE EXIBIÇÃO POR TIPO DE AÇÃO
-// ============================================================
 
 const ROTULOS_TIPO: Record<string, string> = {
   login: '🔑 Login',

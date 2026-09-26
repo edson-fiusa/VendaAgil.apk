@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,6 +14,15 @@ import {
   View,
   useWindowDimensions,
 } from 'react-native';
+
+import * as Updates from 'expo-updates';
+
+import { LinearGradient } from 'expo-linear-gradient';
+
+import {
+  PinchGestureHandler,
+  State as GestureState,
+} from 'react-native-gesture-handler';
 
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -98,6 +106,27 @@ export default function Index() {
     useState<TelaAdmin>('menu');
 
   // ============================================================
+  // GRADE DO MENU ADMINISTRATIVO (ZOOM POR PINÇA)
+  // ============================================================
+  //
+  // Em vez de cards fixos agrupados por seção (produtos numa
+  // fileira, relatórios em outra sozinho etc.), todos os itens
+  // do menu ficam numa única grade que preenche as fileiras na
+  // horizontal. O administrador pode dar zoom com os dedos:
+  // afastar os dedos (zoom in) deixa os cards maiores (menos
+  // colunas); juntar os dedos (zoom out) deixa os cards menores
+  // e cabem mais por fileira. Continua responsivo para tablet
+  // e celular deitado, que já começam com mais colunas.
+  // ============================================================
+
+  const colunasIniciais = isTabletOuPaisagem ? 3 : 2;
+
+  const [colunasMenu, setColunasMenu] =
+    useState(colunasIniciais);
+
+  const escalaPincaRef = useRef(1);
+
+  // ============================================================
   // BANCO LOCAL
   // ============================================================
 
@@ -152,6 +181,56 @@ export default function Index() {
     return () => {
       ativo = false;
     };
+  }, []);
+
+  // ============================================================
+  // VERIFICAÇÃO DE ATUALIZAÇÃO (EAS Update)
+  // ============================================================
+
+  useEffect(() => {
+    async function verificarAtualizacao() {
+      if (__DEV__) return; // não checa em modo desenvolvimento
+
+      try {
+        const resultado = await Updates.checkForUpdateAsync();
+
+        if (resultado.isAvailable) {
+          Alert.alert(
+            'Atualização disponível',
+            'Uma nova versão do aplicativo está disponível. Deseja atualizar agora?',
+            [
+              { text: 'Depois', style: 'cancel' },
+              {
+                text: 'Atualizar',
+                onPress: async () => {
+                  try {
+                    await Updates.fetchUpdateAsync();
+                    await Updates.reloadAsync();
+                  } catch (erroFetch: any) {
+                    console.error(
+                      'Erro ao baixar atualização:',
+                      erroFetch
+                    );
+
+                    Alert.alert(
+                      'Erro',
+                      'Não foi possível baixar a atualização agora.'
+                    );
+                  }
+                },
+              },
+            ]
+          );
+        }
+      } catch (error: any) {
+        console.log(
+          'Erro ao verificar atualização:',
+          error
+        );
+      }
+    }
+
+    verificarAtualizacao();
   }, []);
 
   // ============================================================
@@ -1301,202 +1380,157 @@ export default function Index() {
     // MENU ADMINISTRATIVO
     // ----------------------------------------------------------
 
+    // Acompanha o movimento do gesto de pinça enquanto ele
+    // acontece (não muda a grade ainda, só guarda a escala).
+    function aoMoverPinca(evento: any) {
+      escalaPincaRef.current = evento.nativeEvent.scale;
+    }
+
+    // Quando o gesto termina, decide se aumenta ou diminui o
+    // número de colunas com base na escala final da pinça.
+    function aoSoltarPinca(evento: any) {
+      if (evento.nativeEvent.oldState !== GestureState.ACTIVE) {
+        return;
+      }
+
+      const escala = escalaPincaRef.current;
+
+      setColunasMenu((atual) => {
+        // Afastou os dedos (deu zoom) -> cards maiores, menos colunas
+        if (escala > 1.15) {
+          return Math.max(1, atual - 1);
+        }
+
+        // Juntou os dedos (diminuiu o zoom) -> cards menores, mais colunas
+        if (escala < 0.85) {
+          return Math.min(4, atual + 1);
+        }
+
+        return atual;
+      });
+
+      escalaPincaRef.current = 1;
+    }
+
+    // Largura útil do conteúdo (respeita o padding usado em
+    // adminContainer / adminContainerTablet) para calcular o
+    // tamanho exato de cada card conforme o número de colunas.
+    const espacamentoCard = 12;
+
+    const larguraUtilConteudo = isTabletOuPaisagem
+      ? Math.min(width, 900) - 24 * 2
+      : width - 18 * 2;
+
+    const larguraCardMenu =
+      (larguraUtilConteudo -
+        espacamentoCard * (colunasMenu - 1)) /
+      colunasMenu;
+
+    // Todos os itens do menu numa única lista: eles preenchem as
+    // fileiras na horizontal, sem ficar presos a "seções" (por
+    // isso "Relatório de vendas", que antes ficava sozinho numa
+    // fileira, agora divide a fileira com outros cards).
+    const itensMenuAdmin: Array<{
+      icon: string;
+      title: string;
+      onPress: () => void;
+    }> = [
+      {
+        icon: '📦',
+        title: 'Cadastrar produtos',
+        onPress: () => setTelaAdmin('cadastroProduto'),
+      },
+      {
+        icon: '🗂️',
+        title: 'Gerenciar produtos',
+        onPress: () => setTelaAdmin('gerenciarProdutos'),
+      },
+      {
+        icon: '👥',
+        title: 'Gerenciar operadores',
+        onPress: () => setTelaAdmin('gerenciarOperadores'),
+      },
+      {
+        icon: '⚠️',
+        title: 'Avarias',
+        onPress: () => setTelaAdmin('avarias'),
+      },
+      {
+        icon: '🤖',
+        title: 'Perguntar à IA',
+        onPress: () => setTelaAdmin('ia'),
+      },
+      {
+        icon: '📊',
+        title: 'Relatório de vendas',
+        onPress: () => setTelaAdmin('relatorios'),
+      },
+      {
+        icon: '💾',
+        title: 'Backup e restauração',
+        onPress: () => setTelaAdmin('backup'),
+      },
+      {
+        icon: '🔑',
+        title: 'Trocar senha',
+        onPress: () => setTelaAdmin('trocarSenha'),
+      },
+      {
+        icon: '📋',
+        title: 'Log de atividades',
+        onPress: () => setTelaAdmin('logAtividades'),
+      },
+    ];
+
     return (
       <SafeAreaView style={styles.container}>
-        <ScrollView
-          contentContainerStyle={[
-            styles.adminContainer,
-            isTabletOuPaisagem && styles.adminContainerTablet,
-          ]}
-        >
-          <View
-            style={styles.adminCabecalho}
+
+        <View style={styles.adminCabecalho}>
+          <Text style={styles.adminSubtitulo}>
+            Painel Administrativo
+          </Text>
+
+          <TouchableOpacity
+            style={styles.botaoSairPequeno}
+            onPress={sair}
           >
-            <Text
-              style={styles.adminSubtitulo}
-            >
-              Painel Administrativo
+            <Text style={styles.botaoSairTexto}>
+              Sair
             </Text>
+          </TouchableOpacity>
+        </View>
 
-            <TouchableOpacity
-              style={
-                styles.botaoSairPequeno
-              }
-              onPress={sair}
+        {/* Do cabeçalho pra baixo: gradiente puxando pro branco/cinza */}
+        <LinearGradient
+          colors={['#b6eeb6', '#e3f0e6', '#f7f7f8']}
+          style={styles.gradienteConteudo}
+        >
+          <PinchGestureHandler
+            onGestureEvent={aoMoverPinca}
+            onHandlerStateChange={aoSoltarPinca}
+          >
+            <ScrollView
+              contentContainerStyle={[
+                styles.adminContainer,
+                isTabletOuPaisagem && styles.adminContainerTablet,
+              ]}
             >
-              <Text
-                style={styles.botaoSairTexto}
-              >
-                Sair
-              </Text>
-            </TouchableOpacity>
-          </View>
+            
 
-          {/* PRODUTOS */}
-
-          <Text
-            style={styles.secaoMenuTitulo}
-          >
-            Produtos
-          </Text>
-
-          <View
-            style={
-              isTabletOuPaisagem
-                ? styles.gradeMenu
-                : undefined
-            }
-          >
-            <MenuButton
-              title="Cadastrar produtos"
-              description="Cadastrar produtos novos ou ainda não cadastrados"
-              style={
-                isTabletOuPaisagem && styles.menuButtonGrade
-              }
-              onPress={() =>
-                setTelaAdmin(
-                  'cadastroProduto'
-                )
-              }
-            />
-
-            <MenuButton
-              title="Gerenciar produtos"
-              description="Visualizar, editar e excluir produtos"
-              style={
-                isTabletOuPaisagem && styles.menuButtonGrade
-              }
-              onPress={() =>
-                setTelaAdmin(
-                  'gerenciarProdutos'
-                )
-              }
-            />
-          </View>
-
-          {/* ADMINISTRAÇÃO */}
-
-          <Text
-            style={styles.secaoMenuTitulo}
-          >
-            Administração
-          </Text>
-
-          <View
-            style={
-              isTabletOuPaisagem
-                ? styles.gradeMenu
-                : undefined
-            }
-          >
-            <MenuButton
-              title="Gerenciar operadores"
-              description="Adicionar e gerenciar operadores do caixa"
-              style={
-                isTabletOuPaisagem && styles.menuButtonGrade
-              }
-              onPress={() =>
-                setTelaAdmin(
-                  'gerenciarOperadores'
-                )
-              }
-            />
-
-            <MenuButton
-              title="Avarias"
-              description="Registrar perdas e produtos danificados"
-              style={
-                isTabletOuPaisagem && styles.menuButtonGrade
-              }
-              onPress={() =>
-                setTelaAdmin('avarias')
-              }
-            />
-          </View>
-
-          {/* INTELIGÊNCIA */}
-
-          <Text
-            style={styles.secaoMenuTitulo}
-          >
-            Inteligência
-          </Text>
-
-          <MenuButton
-            title="🤖 Perguntar à IA"
-            description="Pergunte sobre vendas, estoque, produtos, pagamentos e faturamento"
-            onPress={() =>
-              setTelaAdmin('ia')
-            }
-          />
-
-          {/* RELATÓRIOS */}
-
-          <Text
-            style={styles.secaoMenuTitulo}
-          >
-            Relatórios
-          </Text>
-
-          <MenuButton
-            title="Relatório de vendas"
-            description="Consultar vendas, valores, operadores, data e hora"
-            onPress={() =>
-              setTelaAdmin(
-                'relatorios'
-              )
-            }
-          />
-
-          {/* SISTEMA */}
-
-          <Text
-            style={styles.secaoMenuTitulo}
-          >
-            Sistema
-          </Text>
-
-          <View
-            style={
-              isTabletOuPaisagem
-                ? styles.gradeMenu
-                : undefined
-            }
-          >
-            <MenuButton
-              title="💾 Backup e restauração"
-              description="Fazer backup semanal ou restaurar o último backup salvo"
-              style={
-                isTabletOuPaisagem && styles.menuButtonGrade
-              }
-              onPress={() =>
-                setTelaAdmin('backup')
-              }
-            />
-
-            <MenuButton
-              title="🔑 Trocar senha"
-              description="Alterar usuário e senha do administrador"
-              style={
-                isTabletOuPaisagem && styles.menuButtonGrade
-              }
-              onPress={() =>
-                setTelaAdmin('trocarSenha')
-              }
-            />
-
-            <MenuButton
-              title="📋 Log de atividades"
-              description="Ver histórico de logins, cadastros, vendas e outras ações"
-              style={
-                isTabletOuPaisagem && styles.menuButtonGrade
-              }
-              onPress={() =>
-                setTelaAdmin('logAtividades')
-              }
-            />
-          </View>
-        </ScrollView>
+              <View style={styles.gradeMenu}>
+                {itensMenuAdmin.map((item) => (
+                  <MenuButton
+                    key={item.title}
+                    icon={item.icon}
+                    title={item.title}
+                    style={{ width: larguraCardMenu }}
+                    onPress={item.onPress}
+                  />
+                ))}
+              </View>
+            </ScrollView>
+          </PinchGestureHandler>
+        </LinearGradient>
       </SafeAreaView>
     );
   }
@@ -1525,13 +1559,13 @@ export default function Index() {
 // ============================================================
 
 function MenuButton({
+  icon,
   title,
-  description,
   onPress,
   style,
 }: {
+  icon: string;
   title: string;
-  description: string;
   onPress: () => void;
   style?: any;
 }) {
@@ -1540,18 +1574,14 @@ function MenuButton({
       style={[styles.menuButton, style]}
       onPress={onPress}
     >
+      <Text style={styles.menuButtonIcone}>
+        {icon}
+      </Text>
+
       <Text
         style={styles.menuButtonTitle}
       >
         {title}
-      </Text>
-
-      <Text
-        style={
-          styles.menuButtonDescription
-        }
-      >
-        {description}
       </Text>
     </TouchableOpacity>
   );
@@ -1564,8 +1594,9 @@ function MenuButton({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#b6eeb6',
+    backgroundColor: '#7bd17b',
     borderRadius: 5,
+    paddingTop: 6,
   },
 
   keyboardContainer: {
@@ -1762,29 +1793,48 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
   },
 
-  // Grade de 2 colunas para os botões do menu administrativo em
-  // telas maiores / deitadas.
+  // Grade de cards quadrados (ícone + nome) para o menu
+  // administrativo, sempre em várias colunas, em qualquer
+  // tamanho de tela.
   gradeMenu: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-start',
+    gap: 12,
   },
 
-  menuButtonGrade: {
-    width: '48.5%',
-  },
-
+  // Cabeçalho fica sempre verde, igual já era antes; o que muda
+  // é o conteúdo abaixo dele, que agora usa um gradiente.
   adminCabecalho: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 28,
+    backgroundColor: '#b6eeb6',
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+  },
+
+  // Área abaixo do cabeçalho: gradiente puxando do verde pro
+  // branco/cinza (ver LinearGradient no render do menu admin).
+  gradienteConteudo: {
+    flex: 1,
+  },
+
+  dicaZoom: {
+    fontSize: 11,
+    color: '#6b7280',
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginBottom: 14,
   },
 
   adminSubtitulo: {
     fontSize: 13,
-    color: '#6b7280',
+    color: '#23262b',
     marginTop: 4,
+    borderRadius: 9,
+    padding: 5,
+    backgroundColor: '#fee2e2',
   },
 
   botaoSairPequeno: {
@@ -1811,23 +1861,31 @@ const styles = StyleSheet.create({
 
   menuButton: {
     backgroundColor: '#fff',
-    borderRadius: 13,
-    padding: 17,
-    marginBottom: 11,
-    elevation: 2,
+    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 6,
+    aspectRatio: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    // Sombra em caixa nos dois sistemas
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.14,
+    shadowRadius: 6,
+  },
+
+  menuButtonIcone: {
+    fontSize: 30,
+    marginBottom: 8,
   },
 
   menuButtonTitle: {
     color: '#111827',
-    fontSize: 17,
+    fontSize: 12.5,
     fontWeight: '800',
-  },
-
-  menuButtonDescription: {
-    color: '#6b7280',
-    fontSize: 12,
-    marginTop: 5,
-    lineHeight: 17,
+    textAlign: 'center',
+    lineHeight: 16,
   },
 
   // ============================================================

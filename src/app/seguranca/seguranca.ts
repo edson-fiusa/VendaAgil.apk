@@ -1,42 +1,9 @@
-// ============================================================
-// SEGURANÇA — VALIDAÇÃO DA SENHA MESTRA
-// ============================================================
-//
-// IMPORTANTE (leia antes de mexer neste arquivo):
-//
-// A senha NÃO fica gravada em texto puro em nenhum lugar do
-// código. Em vez disso, guardamos apenas o "hash" SHA-256 dela
-// (uma sequência de 64 caracteres que não pode ser revertida
-// para descobrir a senha original).
-//
-// Quando o usuário digita uma senha na tela de bloqueio, nós
-// calculamos o hash SHA-256 do que ele digitou e comparamos
-// com o hash salvo aqui. Se forem iguais, a senha está correta.
-//
-// AVISO HONESTO: como este é um aplicativo React Native, todo
-// o código-fonte (incluindo este arquivo) acaba compilado e
-// pode, com esforço técnico, ser extraído do aplicativo
-// instalado. Isso significa que não existe forma 100% segura
-// de esconder uma senha dentro de um app que roda no aparelho
-// do usuário. Usar o hash SHA-256 já é MUITO melhor do que
-// deixar a senha "estoquemestre" escrita diretamente no código
-// (o que apareceria pronta para qualquer pessoa que abrisse o
-// arquivo), mas não é uma proteção de nível bancário. Para algo
-// realmente seguro, a validação da senha precisaria acontecer
-// em um servidor, não dentro do aplicativo.
-//
-// Para trocar a senha no futuro, gere um novo hash SHA-256 da
-// nova senha (qualquer gerador de hash SHA-256 confiável serve)
-// e substitua o valor da constante HASH_SENHA_MESTRE abaixo.
 
 function rightRotate(valor: number, quantidade: number): number {
   return (valor >>> quantidade) | (valor << (32 - quantidade));
 }
 
-/**
- * Implementação pura de SHA-256 em JavaScript (sem dependências
- * externas). Recebe um texto e devolve o hash em hexadecimal.
- */
+
 function sha256Hex(mensagem: string): string {
   const k = [
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
@@ -162,16 +129,10 @@ function sha256Hex(mensagem: string): string {
   );
 }
 
-// Hash SHA-256 da senha mestra. Não é a senha em texto puro —
-// é o resultado do hash, que não pode ser revertido para
-// descobrir a senha original.
+
 const HASH_SENHA_MESTRE =
   '2d985aae6e495676cd7cf6160b308454dacc55d079dd41a2137c9012a0b49019';
 
-/**
- * Verifica se a senha digitada pelo usuário corresponde à
- * senha mestra de desbloqueio do aplicativo.
- */
 export function verificarSenhaMestre(senhaDigitada: string): boolean {
   const texto = String(senhaDigitada || '').trim();
 
