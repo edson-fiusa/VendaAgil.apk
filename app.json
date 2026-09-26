@@ -2,17 +2,20 @@
   "expo": {
     "name": "VendaÁgil",
     "slug": "mobile",
-    "version": "2.1.4",
-    "orientation": "portrait",
+    "version": "2.1.6",
+    "orientation": "default",
     "icon": "./src/app/img/icon.png",
     "scheme": "vendaagil",
     "userInterfaceStyle": "automatic",
-    "runtimeVersion": {
-      "policy": "appVersion"
-    },
     "updates": {
-      "url": "https://u.expo.dev/c2c0c2f6-576d-4b92-bbdb-e1488e968777"
-    },
+  "url": "https://u.expo.dev/c2c0c2f6-576d-4b92-bbdb-e1488e968777",
+  "enabled": true,
+  "checkAutomatically": "ON_LOAD",
+  "fallbackToCacheTimeout": 0
+  },
+  "runtimeVersion": {
+  "policy": "sdkVersion" // ou "appVersion", precisa bater com o publicado
+},
     "ios": {
       "icon": "./assets/expo.icon",
       "infoPlist": {

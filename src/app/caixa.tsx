@@ -13,13 +13,13 @@ import {
   TextInput,
   TouchableOpacity,
   View,
-  useWindowDimensions,
 } from 'react-native';
 
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import QRCode from 'react-native-qrcode-svg';
 
 import { obterBanco } from '../database/banco';
+import { useOrientacaoDispositivo } from '../../src/useOrientacaoDispositivo';
 
 type Produto = {
   id: number;
@@ -75,7 +75,12 @@ type CaixaProps = {
 // MERCADO PAGO — TOKEN FIXO (UMA CONTA SÓ, SEM OAUTH POR LOJA)
 //
 // Configure no .env / app.config:
-//    EXPO_PUBLIC_MP_ACCESS_TOKEN=APP_USR-xxxxxxxx
+//   EXPO_PUBLIC_MP_ACCESS_TOKEN=APP_USR-xxxxxxxx
+//
+// Esse token é o "Access Token" de PRODUÇÃO da conta do
+// Mercado Pago que vai RECEBER os pagamentos PIX gerados
+// pelo app. Não é o client_id/client_secret de OAuth — é só
+// isso, um token único usado por todas as lojas.
 // ============================================================
 
 const MP_ACCESS_TOKEN = process.env
@@ -89,13 +94,8 @@ const STATUS_FINAIS_ERRO = [
 ];
 
 const MAX_FALHAS_CONSULTA_PIX = 5;
-const TEMPO_AVISO_DEMORA_MS = 45000;
-const TEMPO_EXPIRACAO_PIX_MS = 10 * 60 * 800; // 4 minutos
-
-// Quantidade máxima de itens detalhados no QR Code da nota. Como o QR
-// tem capacidade limitada, carrinhos maiores que isso são resumidos
-// para o QR não ficar denso demais para escanear.
-const MAX_ITENS_QR_CUPOM = 12;
+const TEMPO_AVISO_DEMORA_MS = 45_000;
+const TEMPO_EXPIRACAO_PIX_MS = 4 * 60 * 1000; // 10 minutos
 
 function formatarTempoRestante(ms: number): string {
   const totalSegundos = Math.max(0, Math.ceil(ms / 1000));
@@ -162,68 +162,14 @@ function nomeFormaPagamento(forma: FormaPagamento): string {
   return 'Dinheiro';
 }
 
-// Monta o texto que vai dentro do QR Code do cupom. Como o app não tem
-// servidor, o QR carrega o conteúdo da nota em texto puro: a maioria
-// dos apps de câmera (iOS/Android) já mostra esse texto decodificado
-// na tela de quem escaneia, sem precisar abrir nada.
-function montarTextoQrCupom(venda: VendaConcluida): string {
-  const itensParaExibir = venda.itens.slice(0, MAX_ITENS_QR_CUPOM);
-  const itensOmitidos = venda.itens.length > MAX_ITENS_QR_CUPOM;
-
-  const linhasItens = itensParaExibir
-    .map(
-      (item) =>
-        `${fmt3(item.quantidade)} ${item.unidade} - ${item.nome}\n` +
-        `  ${fmt(item.preco)} x ${fmt3(item.quantidade)} = ${fmt(
-          item.preco * item.quantidade
-        )}`
-    )
-    .join('\n');
-
-  let texto =
-    `VENDA AGIL PDV\n` +
-    `Venda #${venda.id} - ${venda.data}\n\n` +
-    linhasItens;
-
-  if (itensOmitidos) {
-    texto += `\n... e mais ${
-      venda.itens.length - MAX_ITENS_QR_CUPOM
-    } item(ns)`;
-  }
-
-  texto += `\n\nTOTAL: ${fmt(venda.total)}\n`;
-  texto += `Pagamento: ${nomeFormaPagamento(venda.formaPagamento)}`;
-
-  if (venda.formaPagamento === 'dinheiro') {
-    texto += `\nRecebido: ${fmt(venda.valorRecebido)}`;
-    texto += `\nTroco: ${fmt(venda.troco)}`;
-  }
-
-  texto += `\n\nObrigado pela preferencia!`;
-
-  return texto;
-}
-
 export default function Caixa({
   operador,
   caixa,
   onLogout,
   toast,
 }: CaixaProps) {
-  const { width, height } = useWindowDimensions();
 
-  // Detecta tablet pela menor dimensão da tela (independente da orientação)
-  // e detecta paisagem comparando largura x altura. Isso garante que um
-  // tablet girado para retrato também seja tratado como tablet, e que um
-  // celular deitado (paisagem) também ganhe o layout de duas colunas.
-  const menorDimensao = Math.min(width, height);
-  const isTablet = menorDimensao >= 600;
-  const isPaisagem = width > height;
-  const isLandscapeOrTablet = isTablet || isPaisagem;
-
-  // Em tablets grandes na paisagem, mostramos o catálogo em grade
-  // (mais de uma coluna) para aproveitar melhor o espaço horizontal.
-  const colunasProdutos = isTablet && isPaisagem && width >= 900 ? 2 : 1;
+  const { isTablet, isLadoALado } = useOrientacaoDispositivo();
 
   const [busca, setBusca] = useState('');
   const [produtos, setProdutos] = useState<Produto[]>([]);
@@ -304,14 +250,14 @@ export default function Caixa({
 
   function expirarPix() {
     limparTimersPix();
+
     pixProcessandoRef.current = false;
+
     setPixExpiraEm(null);
     setPixTempoRestante('');
-    setPixError('O QR Code expirou sem confirmação de pagamento. Gere um novo PIX.');
-  }
-
-  function setPixError(msg: string) {
-    setPixErro(msg);
+    setPixErro(
+      'O QR Code expirou sem confirmação de pagamento. Gere um novo PIX.'
+    );
   }
 
   function iniciarContadorPix(expiraEm: number) {
@@ -399,10 +345,6 @@ export default function Caixa({
   const produtosFiltrados = useMemo(() => {
     const termo = busca.trim().toLowerCase();
 
-    if (!termo && isLandscapeOrTablet) {
-      return produtos.slice(0, 100);
-    }
-
     if (!termo) {
       return [];
     }
@@ -428,7 +370,7 @@ export default function Caixa({
         );
       })
       .slice(0, 100);
-  }, [busca, produtos, isLandscapeOrTablet]);
+  }, [busca, produtos]);
 
   const total = useMemo(() => {
     return dinheiro(
@@ -514,9 +456,7 @@ export default function Caixa({
       ];
     });
 
-    if (!isLandscapeOrTablet) {
-      setBusca('');
-    }
+    setBusca('');
     mostrarFlash();
   }
 
@@ -852,7 +792,7 @@ export default function Caixa({
     } finally {
       setFinalizando(false);
     }
-}
+  }
 
   async function gerarPix() {
     if (!carrinho.length) {
@@ -889,6 +829,7 @@ export default function Caixa({
 
       const agoraMs = Date.now();
       const expiraEm = agoraMs + TEMPO_EXPIRACAO_PIX_MS;
+
       const dataExpiracaoIso = new Date(expiraEm).toISOString();
 
       const resposta = await fetch(
@@ -978,6 +919,7 @@ export default function Caixa({
       };
 
       setPix(pixData);
+
       iniciarContadorPix(expiraEm);
 
       pixIntervalRef.current = setInterval(async () => {
@@ -1042,7 +984,8 @@ export default function Caixa({
 
       if (STATUS_FINAIS_ERRO.includes(status)) {
         limparTimersPix();
-        setPixError(`Pagamento PIX não aprovado. Status: ${status}`);
+
+        setPixErro(`Pagamento PIX não aprovado. Status: ${status}`);
         return;
       }
 
@@ -1058,6 +1001,7 @@ export default function Caixa({
         pixProcessandoRef.current = true;
 
         limparTimersPix();
+
         setPixPago(true);
 
         await finalizarVendaLocal('pix', mercadoPagoId);
@@ -1082,11 +1026,13 @@ export default function Caixa({
 
       if (falhasConsultaRef.current >= MAX_FALHAS_CONSULTA_PIX) {
         limparTimersPix();
-        setPixError(
+
+        setPixErro(
           'Não foi possível confirmar automaticamente o pagamento PIX ' +
           '(falha ao consultar o Mercado Pago repetidamente).\n\n' +
           'Verifique o status desse pagamento no aplicativo/site do ' +
-          'Mercado Pago antes de repetir a cobrança.'
+          'Mercado Pago antes de repetir a cobrança, para não cobrar o ' +
+          'cliente duas vezes.'
         );
       }
     } finally {
@@ -1159,6 +1105,7 @@ export default function Caixa({
       });
 
       setSaldoFinal(dinheiro(dinheiroEsperado).toFixed(2));
+
       setModalFechamento(true);
     } catch (erro) {
       console.error('ERRO AO CARREGAR RESUMO LOCAL:', erro);
@@ -1198,6 +1145,7 @@ export default function Caixa({
               setEncerrando(true);
 
               const db = await obterBanco();
+
               const agora = new Date().toISOString();
 
               const resultado = await db.runAsync(
@@ -1254,6 +1202,7 @@ export default function Caixa({
 
   function cancelarPix() {
     limparTimersPix();
+
     pixProcessandoRef.current = false;
     falhasConsultaRef.current = 0;
 
@@ -1305,7 +1254,12 @@ export default function Caixa({
         </TouchableOpacity>
       </View>
 
-      <View style={styles.areaBusca}>
+      <View
+        style={[
+          styles.areaBusca,
+          isTablet && styles.areaBuscaTablet,
+        ]}
+      >
         <TextInput
           style={styles.inputBusca}
           value={busca}
@@ -1333,13 +1287,30 @@ export default function Caixa({
         </Animated.View>
       )}
 
-      {/* CONTEÚDO PRINCIPAL (ADAPTADO PARA TABLET / PAISAGEM / RETRATO) */}
-      <View style={[styles.conteudo, isLandscapeOrTablet && styles.conteudoLandscape]}>
-        {(isLandscapeOrTablet || busca.trim() !== '') && (
-          <View style={[styles.areaProdutos, isLandscapeOrTablet && styles.areaProdutosLandscape]}>
+      {/*
+        Em tablet (sempre deitado) ou celular deitado, os produtos
+        encontrados ficam numa coluna à esquerda e o carrinho numa
+        coluna à direita, lado a lado, como num PDV de balcão.
+        Em telefone em pé, continua empilhado (produtos em cima,
+        carrinho embaixo), como era antes. isLadoALado vem do hook
+        central e reage sozinho a qualquer rotação do aparelho.
+      */}
+      <View
+        style={[
+          styles.conteudo,
+          isLadoALado && styles.conteudoLadoALado,
+        ]}
+      >
+        {busca.trim() !== '' && (
+          <View
+            style={[
+              styles.areaProdutos,
+              isLadoALado && styles.areaProdutosLadoALado,
+            ]}
+          >
             <View style={styles.tituloSecao}>
               <Text style={styles.tituloSecaoTexto}>
-                {isLandscapeOrTablet && !busca.trim() ? 'Catálogo de Produtos' : 'Produtos encontrados'}
+                Produtos encontrados
               </Text>
 
               <Text style={styles.contadorProdutos}>
@@ -1357,12 +1328,10 @@ export default function Caixa({
               </View>
             ) : (
               <ScrollView
-                style={[styles.listaProdutos, isLandscapeOrTablet && styles.listaProdutosLandscape]}
-                contentContainerStyle={
-                  colunasProdutos > 1
-                    ? styles.gradeProdutosContainer
-                    : undefined
-                }
+                style={[
+                  styles.listaProdutos,
+                  isLadoALado && styles.listaProdutosLadoALado,
+                ]}
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator={true}
               >
@@ -1370,13 +1339,7 @@ export default function Caixa({
                   const estoque = numero(produto.quantidade);
 
                   return (
-                    <View
-                      key={produto.id}
-                      style={[
-                        styles.cardProduto,
-                        colunasProdutos > 1 && styles.cardProdutoGrade,
-                      ]}
-                    >
+                    <View key={produto.id} style={styles.cardProduto}>
                       <View style={styles.infoProduto}>
                         <Text
                           style={styles.nomeProduto}
@@ -1442,7 +1405,12 @@ export default function Caixa({
           </View>
         )}
 
-        <View style={[styles.areaCarrinho, isLandscapeOrTablet && styles.areaCarrinhoLandscape]}>
+        <View
+          style={[
+            styles.areaCarrinho,
+            isLadoALado && styles.areaCarrinhoLadoALado,
+          ]}
+        >
           <View style={styles.cabecalhoCarrinho}>
             <View>
               <Text style={styles.tituloCarrinho}>Carrinho</Text>
@@ -1897,12 +1865,13 @@ export default function Caixa({
         <View style={styles.modalFundo}>
           <View style={styles.modalCupom}>
             <Text style={styles.cupomTitulo}>VENDA ÁGIL PDV</Text>
-            <Text style={styles.cupomEndereco}>Extrato da Venda</Text>
+            <Text style={styles.cupomSubtitulo}>CNPJ: 00.000.000/0001-00</Text>
+            <Text style={styles.cupomEndereco}>Comprovante de Venda / Extrato</Text>
 
             <View style={styles.linhaSeparadorDashed} />
 
             <View style={styles.cupomInfoGeral}>
-              <Text style={styles.cupomTextoInfo}>Data a Hora da Venda</Text>
+              <Text style={styles.cupomTextoInfo}>Venda: #{vendaConcluida?.id}</Text>
               <Text style={styles.cupomTextoInfo}>{vendaConcluida?.data}</Text>
             </View>
 
@@ -1958,24 +1927,6 @@ export default function Caixa({
                 </>
               )}
             </View>
-
-            <View style={styles.linhaSeparadorDashed} />
-
-            {/* QR Code com o conteúdo da nota, para o cliente escanear
-                e visualizar no próprio celular (funciona sem servidor:
-                o texto vai embutido direto no QR). */}
-            {vendaConcluida && (
-              <View style={styles.cupomQrContainer}>
-                <QRCode
-                  value={montarTextoQrCupom(vendaConcluida)}
-                  size={150}
-                />
-
-                <Text style={styles.cupomQrLegenda}>
-                  Escaneie para ver a nota no seu celular
-                </Text>
-              </View>
-            )}
 
             <View style={styles.linhaSeparadorDashed} />
 
@@ -2187,6 +2138,12 @@ const styles = StyleSheet.create({
     borderBottomColor: '#e5e7eb',
   },
 
+  areaBuscaTablet: {
+    width: '100%',
+    maxWidth: 900,
+    alignSelf: 'center',
+  },
+
   inputBusca: {
     flex: 1,
     height: 46,
@@ -2231,10 +2188,9 @@ const styles = StyleSheet.create({
 
   conteudo: {
     flex: 1,
-    flexDirection: 'column',
   },
 
-  conteudoLandscape: {
+  conteudoLadoALado: {
     flexDirection: 'row',
   },
 
@@ -2245,8 +2201,8 @@ const styles = StyleSheet.create({
     borderBottomColor: '#d1d5db',
   },
 
-  areaProdutosLandscape: {
-    flex: 1.15,
+  areaProdutosLadoALado: {
+    flex: 1,
     maxHeight: undefined,
     borderBottomWidth: 0,
     borderRightWidth: 1,
@@ -2285,7 +2241,7 @@ const styles = StyleSheet.create({
     maxHeight: 175,
   },
 
-  listaProdutosLandscape: {
+  listaProdutosLadoALado: {
     maxHeight: undefined,
     flex: 1,
   },
@@ -2299,16 +2255,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     borderWidth: 1,
     borderColor: '#e5e7eb',
-  },
-
-  gradeProdutosContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-
-  cardProdutoGrade: {
-    width: '49%',
   },
 
   infoProduto: {
@@ -2404,10 +2350,9 @@ const styles = StyleSheet.create({
     minHeight: 0,
   },
 
-  areaCarrinhoLandscape: {
-    flex: 0.85,
-    maxWidth: 420,
+  areaCarrinhoLadoALado: {
     borderTopWidth: 0,
+    maxWidth: 480,
   },
 
   cabecalhoCarrinho: {
@@ -3033,18 +2978,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '900',
     color: '#2563eb',
-  },
-
-  cupomQrContainer: {
-    alignItems: 'center',
-    marginVertical: 4,
-  },
-
-  cupomQrLegenda: {
-    marginTop: 6,
-    fontSize: 10,
-    color: '#6b7280',
-    textAlign: 'center',
   },
 
   cupomRodape: {
