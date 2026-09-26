@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -45,6 +46,35 @@ import LogAtividades from './seguranca/log_atividades';
 import TrocarSenha from './seguranca/trocar-senha';
 
 import { registrarLog } from '../../src/app/seguranca/log';
+
+// ============================================================
+// LARGURA DO CARD DO MENU
+// ============================================================
+//
+// Função pura (sem depender de hooks) que calcula a largura de
+// cada card do menu administrativo a partir do número de
+// colunas e da largura útil da tela. Fica fora do componente
+// para poder ser usada tanto no valor inicial do Animated.Value
+// quanto dentro do efeito que anima a transição (ver
+// "cardWidthAnim" mais abaixo).
+// ============================================================
+
+function calcularLarguraCardMenu(
+  colunas: number,
+  larguraTela: number,
+  tabletOuPaisagem: boolean
+): number {
+  const espacamentoCard = 12;
+
+  const larguraUtilConteudo = tabletOuPaisagem
+    ? Math.min(larguraTela, 900) - 24 * 2
+    : larguraTela - 18 * 2;
+
+  return (
+    (larguraUtilConteudo - espacamentoCard * (colunas - 1)) /
+    colunas
+  );
+}
 
 // ============================================================
 // INTERFACES
@@ -117,6 +147,21 @@ export default function Index() {
   // colunas); juntar os dedos (zoom out) deixa os cards menores
   // e cabem mais por fileira. Continua responsivo para tablet
   // e celular deitado, que já começam com mais colunas.
+  //
+  // Para a transição não ficar brusca, dois efeitos trabalham
+  // juntos:
+  //  1) Enquanto os dedos se movem, "pinchScale" aplica um
+  //     zoom visual contínuo e imediato na grade inteira (via
+  //     Animated), então o usuário já vê e sente o gesto em
+  //     tempo real, sem esperar soltar os dedos.
+  //  2) Ao soltar, decidimos o novo número de colunas, e um
+  //     segundo Animated.Value ("cardWidthAnim") anima a
+  //     largura de cada card suavemente até o novo tamanho
+  //     (em vez de um salto instantâneo), enquanto o zoom
+  //     visual (1) é aliviado de volta a 1 na mesma duração.
+  //
+  //  OBS: usamos Animated (não LayoutAnimation) porque
+  //  LayoutAnimation é um no-op na New Architecture (Fabric).
   // ============================================================
 
   const colunasIniciais = isTabletOuPaisagem ? 3 : 2;
@@ -125,6 +170,38 @@ export default function Index() {
     useState(colunasIniciais);
 
   const escalaPincaRef = useRef(1);
+
+  const pinchScale = useRef(new Animated.Value(1)).current;
+
+  const cardWidthAnim = useRef(
+    new Animated.Value(
+      calcularLarguraCardMenu(
+        colunasIniciais,
+        width,
+        isTabletOuPaisagem
+      )
+    )
+  ).current;
+
+  const DURACAO_TRANSICAO_PINCA = 260;
+
+  // Sempre que o número de colunas muda (pinça) ou a tela gira
+  // / redimensiona, anima suavemente a largura do card até o
+  // novo valor-alvo, em vez de aplicar de uma vez.
+  useEffect(() => {
+    const larguraAlvo = calcularLarguraCardMenu(
+      colunasMenu,
+      width,
+      isTabletOuPaisagem
+    );
+
+    Animated.timing(cardWidthAnim, {
+      toValue: larguraAlvo,
+      duration: DURACAO_TRANSICAO_PINCA,
+      useNativeDriver: false, // width não suporta native driver
+    }).start();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [colunasMenu, width, isTabletOuPaisagem]);
 
   // ============================================================
   // BANCO LOCAL
@@ -1381,13 +1458,30 @@ export default function Index() {
     // ----------------------------------------------------------
 
     // Acompanha o movimento do gesto de pinça enquanto ele
-    // acontece (não muda a grade ainda, só guarda a escala).
+    // acontece: aplica um zoom visual contínuo na grade (via
+    // Animated.Value) para dar feedback imediato, além de
+    // guardar a escala para decidir o número de colunas quando
+    // soltar os dedos.
     function aoMoverPinca(evento: any) {
-      escalaPincaRef.current = evento.nativeEvent.scale;
+      const escala = evento.nativeEvent.scale;
+      escalaPincaRef.current = escala;
+
+      // Limita o quanto a grade cresce/encolhe ao vivo, pra não
+      // deixar o conteúdo gigante ou minúsculo demais enquanto
+      // o gesto ainda está em andamento.
+      const escalaLimitada = Math.max(
+        0.7,
+        Math.min(1.3, escala)
+      );
+
+      pinchScale.setValue(escalaLimitada);
     }
 
     // Quando o gesto termina, decide se aumenta ou diminui o
-    // número de colunas com base na escala final da pinça.
+    // número de colunas com base na escala final da pinça. A
+    // troca de tamanho em si é animada pelo useEffect que
+    // acompanha "colunasMenu" (definido acima, perto do estado),
+    // então aqui só precisamos atualizar o número de colunas.
     function aoSoltarPinca(evento: any) {
       if (evento.nativeEvent.oldState !== GestureState.ACTIVE) {
         return;
@@ -1395,36 +1489,37 @@ export default function Index() {
 
       const escala = escalaPincaRef.current;
 
+      let mudou = false;
+
       setColunasMenu((atual) => {
         // Afastou os dedos (deu zoom) -> cards maiores, menos colunas
         if (escala > 1.15) {
+          mudou = true;
           return Math.max(1, atual - 1);
         }
 
         // Juntou os dedos (diminuiu o zoom) -> cards menores, mais colunas
         if (escala < 0.85) {
+          mudou = true;
           return Math.min(4, atual + 1);
         }
 
         return atual;
       });
 
+      // Alivia o zoom "ao vivo" de volta a 1 na mesma duração da
+      // animação de largura acima, para que o encolhimento/
+      // crescimento visual do dedo se funda com a nova grade já
+      // animada, em vez de os dois acontecerem em momentos
+      // diferentes.
+      Animated.timing(pinchScale, {
+        toValue: 1,
+        duration: mudou ? DURACAO_TRANSICAO_PINCA : 150,
+        useNativeDriver: true,
+      }).start();
+
       escalaPincaRef.current = 1;
     }
-
-    // Largura útil do conteúdo (respeita o padding usado em
-    // adminContainer / adminContainerTablet) para calcular o
-    // tamanho exato de cada card conforme o número de colunas.
-    const espacamentoCard = 12;
-
-    const larguraUtilConteudo = isTabletOuPaisagem
-      ? Math.min(width, 900) - 24 * 2
-      : width - 18 * 2;
-
-    const larguraCardMenu =
-      (larguraUtilConteudo -
-        espacamentoCard * (colunasMenu - 1)) /
-      colunasMenu;
 
     // Todos os itens do menu numa única lista: eles preenchem as
     // fileiras na horizontal, sem ficar presos a "seções" (por
@@ -1517,17 +1612,25 @@ export default function Index() {
             >
             
 
-              <View style={styles.gradeMenu}>
+              <Animated.View
+                style={[
+                  styles.gradeMenu,
+                  { transform: [{ scale: pinchScale }] },
+                ]}
+              >
                 {itensMenuAdmin.map((item) => (
-                  <MenuButton
+                  <Animated.View
                     key={item.title}
-                    icon={item.icon}
-                    title={item.title}
-                    style={{ width: larguraCardMenu }}
-                    onPress={item.onPress}
-                  />
+                    style={{ width: cardWidthAnim }}
+                  >
+                    <MenuButton
+                      icon={item.icon}
+                      title={item.title}
+                      onPress={item.onPress}
+                    />
+                  </Animated.View>
                 ))}
-              </View>
+              </Animated.View>
             </ScrollView>
           </PinchGestureHandler>
         </LinearGradient>
@@ -1562,16 +1665,14 @@ function MenuButton({
   icon,
   title,
   onPress,
-  style,
 }: {
   icon: string;
   title: string;
   onPress: () => void;
-  style?: any;
 }) {
   return (
     <TouchableOpacity
-      style={[styles.menuButton, style]}
+      style={styles.menuButton}
       onPress={onPress}
     >
       <Text style={styles.menuButtonIcone}>
@@ -1860,6 +1961,7 @@ const styles = StyleSheet.create({
   },
 
   menuButton: {
+    width: '100%',
     backgroundColor: '#fff',
     borderRadius: 16,
     paddingVertical: 16,
