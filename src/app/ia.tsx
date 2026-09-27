@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 
 import {
@@ -16,6 +15,11 @@ import {
 } from 'react-native';
 
 import * as Speech from 'expo-speech';
+
+import {
+  ExpoSpeechRecognitionModule,
+  useSpeechRecognitionEvent,
+} from 'expo-speech-recognition';
 
 import { obterBanco } from '../../src/database/banco';
 
@@ -654,8 +658,70 @@ export default function IA() {
   const [carregando, setCarregando] = useState(false);
   const [falando, setFalando] = useState(false);
   const [tecladoAberto, setTecladoAberto] = useState(false);
+  const [gravando, setGravando] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
+
+  // Guarda o texto reconhecido mais recente. Usamos um ref (e
+  // não só o state "mensagem") porque quando a gravação termina
+  // precisamos do valor mais atual na hora, sem esperar o
+  // próximo render — states do React não atualizam na hora.
+  const transcritoRef = useRef('');
+
+  /*
+   * ---------------------------------------------------------
+   * RECONHECIMENTO DE VOZ (expo-speech-recognition)
+   * ---------------------------------------------------------
+   */
+  useSpeechRecognitionEvent('start', () => {
+    setGravando(true);
+  });
+
+  useSpeechRecognitionEvent('result', (event) => {
+    const texto = event.results?.[0]?.transcript ?? '';
+
+    transcritoRef.current = texto;
+
+    // Mostra o texto sendo reconhecido em tempo real no campo,
+    // como se a pessoa estivesse digitando.
+    setMensagem(texto);
+  });
+
+  useSpeechRecognitionEvent('end', () => {
+    setGravando(false);
+
+    const textoFinal = transcritoRef.current.trim();
+    transcritoRef.current = '';
+
+    if (textoFinal) {
+      enviarMensagem(textoFinal);
+    }
+  });
+
+  useSpeechRecognitionEvent('error', (event) => {
+    setGravando(false);
+
+    console.log(
+      'Erro no reconhecimento de voz:',
+      event.error,
+      event.message
+    );
+
+    // "no-speech" e "aborted" acontecem em situações normais
+    // (ex.: usuário tocou no microfone e não falou nada, ou
+    // cancelou a gravação), então não vale a pena mostrar um
+    // alerta de erro nesses casos.
+    if (
+      event.error !== 'no-speech' &&
+      event.error !== 'aborted'
+    ) {
+      Alert.alert(
+        'Reconhecimento de voz',
+        event.message ||
+          'Não foi possível reconhecer sua fala. Tente novamente.'
+      );
+    }
+  });
 
   /*
    * ---------------------------------------------------------
@@ -761,9 +827,13 @@ export default function IA() {
    * ---------------------------------------------------------
    * ENVIAR PERGUNTA
    * ---------------------------------------------------------
+   *
+   * Aceita um texto opcional (usado quando a pergunta vem do
+   * microfone). Se não vier nada, usa o que está digitado no
+   * campo de texto.
    */
-  async function enviarMensagem() {
-    const pergunta = mensagem.trim();
+  async function enviarMensagem(textoForcado?: string) {
+    const pergunta = (textoForcado ?? mensagem).trim();
 
     if (!pergunta || carregando) {
       return;
@@ -1003,14 +1073,60 @@ ${contextoBanco}
 
   /*
    * ---------------------------------------------------------
-   * MICROFONE
+   * MICROFONE (liga/desliga a gravação e o reconhecimento)
    * ---------------------------------------------------------
    */
-  function abrirMicrofone() {
-    Alert.alert(
-      'Comando de voz',
-      'O reconhecimento de voz precisa de um Development Build do Expo para funcionar nativamente.'
-    );
+  async function alternarGravacao() {
+    // Se já está gravando, o toque serve para PARAR a gravação
+    // manualmente (o reconhecimento também para sozinho quando
+    // detecta silêncio).
+    if (gravando) {
+      try {
+        ExpoSpeechRecognitionModule.stop();
+      } catch (erro) {
+        console.log('Erro ao parar reconhecimento de voz:', erro);
+      }
+
+      return;
+    }
+
+    if (carregando) {
+      return;
+    }
+
+    try {
+      const permissao =
+        await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+
+      if (!permissao.granted) {
+        Alert.alert(
+          'Permissão necessária',
+          'Autorize o uso do microfone e do reconhecimento de voz nas configurações do aparelho para usar o comando por voz.'
+        );
+
+        return;
+      }
+
+      transcritoRef.current = '';
+      setMensagem('');
+
+      ExpoSpeechRecognitionModule.start({
+        lang: 'pt-BR',
+        interimResults: true,
+        maxAlternatives: 1,
+        continuous: false,
+      });
+    } catch (erro) {
+      console.log(
+        'Erro ao iniciar reconhecimento de voz:',
+        erro
+      );
+
+      Alert.alert(
+        'Comando de voz indisponível',
+        'O reconhecimento de voz só funciona em um Development Build do Expo (não funciona no Expo Go).'
+      );
+    }
   }
 
   /*
@@ -1144,6 +1260,27 @@ ${contextoBanco}
             </Text>
           </View>
         )}
+
+        {gravando && (
+          <View
+            style={[
+              styles.mensagem,
+              styles.mensagemUsuario,
+              styles.carregando,
+            ]}
+          >
+            <ActivityIndicator size="small" color="#fff" />
+
+            <Text
+              style={[
+                styles.textoCarregando,
+                { color: '#fff' },
+              ]}
+            >
+              Ouvindo... fale sua pergunta
+            </Text>
+          </View>
+        )}
       </ScrollView>
 
       <View
@@ -1154,11 +1291,14 @@ ${contextoBanco}
         ]}
       >
         <TouchableOpacity
-          style={styles.botaoMicrofone}
-          onPress={abrirMicrofone}
+          style={[
+            styles.botaoMicrofone,
+            gravando && styles.botaoMicrofoneAtivo,
+          ]}
+          onPress={alternarGravacao}
         >
           <Text style={styles.iconeMicrofone}>
-            🎤
+            {gravando ? '⏹️' : '🎤'}
           </Text>
         </TouchableOpacity>
 
@@ -1170,7 +1310,7 @@ ${contextoBanco}
           multiline
           textAlignVertical="center"
           style={styles.input}
-          editable={!carregando}
+          editable={!carregando && !gravando}
           onFocus={() => {
             setTimeout(() => {
               scrollRef.current?.scrollToEnd({
@@ -1194,7 +1334,7 @@ ${contextoBanco}
               carregando) &&
               styles.botaoEnviarDesabilitado,
           ]}
-          onPress={enviarMensagem}
+          onPress={() => enviarMensagem()}
           disabled={
             !mensagem.trim() ||
             carregando
@@ -1381,6 +1521,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#eef5ff',
+  },
+
+  botaoMicrofoneAtivo: {
+    backgroundColor: '#ffdddd',
   },
 
   iconeMicrofone: {

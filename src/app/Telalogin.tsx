@@ -4,6 +4,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
@@ -66,7 +67,7 @@ export function TelaLogin({
   diasTeste,
 }: TelaLoginProps) {
   // ----------------------------------------------------------
-  // ESCOLHA ADMIN / CAIXA
+  // ESCOLHA ADMIN / CAIXA (MENU COM CARDS)
   // ----------------------------------------------------------
 
   if (telaLogin === 'escolha') {
@@ -101,44 +102,81 @@ export function TelaLogin({
 
             <View
               style={[
-                estilos.loginCard,
-                isLargo && estilos.loginCardLargo,
-                isPaisagem && estilos.loginCardPaisagem,
+                menuEstilos.menuWrapper,
+                isLargo && menuEstilos.menuWrapperLargo,
               ]}
             >
-              <Text style={estilos.loginTitulo}>Acesso ao sistema</Text>
+              <Text style={menuEstilos.menuTitulo}>Acesso ao sistema</Text>
+              <Text style={menuEstilos.menuSubtitulo}>
+                Selecione como deseja entrar
+              </Text>
 
-              <TouchableOpacity
+              <View
                 style={[
-                  estilos.botaoPrincipal,
-                  !bancoPronto && estilos.botaoDesabilitado,
+                  menuEstilos.cardsLista,
+                  isPaisagem && menuEstilos.cardsListaPaisagem,
                 ]}
-                onPress={() => setTelaLogin('admin')}
-                disabled={!bancoPronto}
               >
-                <Text style={estilos.botaoPrincipalTexto}>Administrador</Text>
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  style={[
+                    menuEstilos.card,
+                    isPaisagem && menuEstilos.cardPaisagem,
+                    !bancoPronto && menuEstilos.cardDesabilitado,
+                  ]}
+                  onPress={() => setTelaLogin('admin')}
+                  disabled={!bancoPronto}
+                >
+                  <View
+                    style={[menuEstilos.cardIcone, menuEstilos.cardIconeAdmin]}
+                  >
+                    <Text style={menuEstilos.cardIconeTexto}>👤</Text>
+                  </View>
 
-                <Text style={estilos.botaoDescricao}>
-                  Produtos, operadores, avarias, relatórios e backup
-                </Text>
-              </TouchableOpacity>
+                  <View style={menuEstilos.cardTextos}>
+                    <Text style={menuEstilos.cardTitulo}>Administrador</Text>
+                    <Text style={menuEstilos.cardDescricao}>
+                      Produtos, operadores, avarias, relatórios e backup
+                    </Text>
+                  </View>
 
-              <TouchableOpacity
-                style={[
-                  estilos.botaoSecundario,
-                  !bancoPronto && estilos.botaoDesabilitado,
-                ]}
-                onPress={() => setTelaLogin('caixa')}
-                disabled={!bancoPronto}
-              >
-                <Text style={estilos.botaoSecundarioTexto}>
-                  Operador de Caixa
-                </Text>
+                  <Text style={menuEstilos.cardSeta}>›</Text>
+                </TouchableOpacity>
 
-                <Text style={estilos.botaoDescricaoEscuro}>
-                  Acessar o PDV
+                <TouchableOpacity
+                  activeOpacity={0.75}
+                  style={[
+                    menuEstilos.card,
+                    isPaisagem && menuEstilos.cardPaisagem,
+                    !bancoPronto && menuEstilos.cardDesabilitado,
+                  ]}
+                  onPress={() => setTelaLogin('caixa')}
+                  disabled={!bancoPronto}
+                >
+                  <View
+                    style={[menuEstilos.cardIcone, menuEstilos.cardIconeCaixa]}
+                  >
+                    <Text style={menuEstilos.cardIconeTexto}>🧾</Text>
+                  </View>
+
+                  <View style={menuEstilos.cardTextos}>
+                    <Text style={menuEstilos.cardTitulo}>
+                      Operador de Caixa
+                    </Text>
+                    <Text style={menuEstilos.cardDescricao}>
+                      Acessar o PDV
+                    </Text>
+                  </View>
+
+                  <Text style={menuEstilos.cardSeta}>›</Text>
+                </TouchableOpacity>
+              </View>
+
+              {!bancoPronto && (
+                <Text style={menuEstilos.avisoBanco}>
+                  Preparando o banco de dados...
                 </Text>
-              </TouchableOpacity>
+              )}
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
@@ -229,3 +267,101 @@ export function TelaLogin({
     </SafeAreaView>
   );
 }
+
+// ----------------------------------------------------------
+// ESTILOS DO MENU DE CARDS (locais, não dependem de Estilos.ts)
+// ----------------------------------------------------------
+
+const menuEstilos = StyleSheet.create({
+  menuWrapper: {
+    width: '100%',
+    maxWidth: 420,
+    alignSelf: 'center',
+  },
+  menuWrapperLargo: {
+    maxWidth: 520,
+  },
+  menuTitulo: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#111827',
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  menuSubtitulo: {
+    fontSize: 14,
+    color: '#6b7280',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  cardsLista: {
+    gap: 14,
+  },
+  cardsListaPaisagem: {
+    flexDirection: 'row',
+  },
+  card: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#dbecdf',
+    borderRadius: 16,
+    paddingVertical: 18,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 10,
+  },
+  cardPaisagem: {
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+  },
+  cardDesabilitado: {
+    opacity: 0.5,
+  },
+  cardIcone: {
+    width: 57,
+    height: 48,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 14,
+  },
+  cardIconeAdmin: {
+    backgroundColor: '#eef2ff',
+  },
+  cardIconeCaixa: {
+    backgroundColor: '#ecfdf5',
+  },
+  cardIconeTexto: {
+    fontSize: 22,
+  },
+  cardTextos: {
+    flex: 1,
+  },
+  cardTitulo: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#111827',
+    marginBottom: 2,
+  },
+  cardDescricao: {
+    fontSize: 13,
+    color: '#6b7280',
+  },
+  cardSeta: {
+    fontSize: 22,
+    color: '#9ca3af',
+    marginLeft: 8,
+  },
+  avisoBanco: {
+    marginTop: 16,
+    fontSize: 13,
+    color: '#9ca3af',
+    textAlign: 'center',
+  },
+});

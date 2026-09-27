@@ -14,7 +14,7 @@
   "fallbackToCacheTimeout": 0
   },
   "runtimeVersion": {
-  "policy": "sdkVersion" // ou "appVersion", precisa bater com o publicado
+  "policy": "sdkVersion" 
 },
     "ios": {
       "icon": "./assets/expo.icon",

@@ -42,7 +42,8 @@ export type OrientacaoDispositivo = {
 //
 // - Detecta tablet x celular.
 // - Quando é TABLET, trava a tela em PAISAGEM (deitado).
-// - Quando é CELULAR, deixa livre em retrato (padrão do app).
+// - Quando é CELULAR, LIBERA a rotação (retrato e paisagem),
+//   já que o app tem layouts próprios para os dois casos.
 // - Fica escutando o evento de rotação do expo-screen-orientation
 //   E também o useWindowDimensions (o React Native já dispara
 //   isso sozinho a cada rotação), então qualquer componente que
@@ -59,7 +60,7 @@ export function useOrientacaoDispositivo(): OrientacaoDispositivo {
   // Tablet sempre deitado; celular também conta como "lado a
   // lado" quando já está deitado (largura maior que altura),
   // então o layout de PDV com duas colunas aparece nos dois
-  // casos, mesmo antes da trava de orientação ser aplicada.
+  // casos.
   const isLadoALado = isTablet || isPaisagem;
 
   const jaTravouRef = useRef<'tablet' | 'celular' | null>(null);
@@ -86,9 +87,11 @@ export function useOrientacaoDispositivo(): OrientacaoDispositivo {
             return;
           }
 
-          await ScreenOrientation.lockAsync(
-            ScreenOrientation.OrientationLock.PORTRAIT_UP
-          );
+          // Libera a rotação: o celular pode girar livremente
+          // entre retrato e paisagem. Usamos unlockAsync (e não
+          // um lockAsync em PORTRAIT_UP, que travaria a tela e
+          // impediria a rotação — era exatamente esse o bug).
+          await ScreenOrientation.unlockAsync();
 
           if (!cancelado) {
             jaTravouRef.current = 'celular';
@@ -98,7 +101,7 @@ export function useOrientacaoDispositivo(): OrientacaoDispositivo {
         // Em alguns ambientes (ex.: Expo Go/web) a API pode não
         // estar disponível. Não deve derrubar o app por isso.
         console.log(
-          'Não foi possível travar a orientação da tela:',
+          'Não foi possível ajustar a orientação da tela:',
           erro
         );
       }

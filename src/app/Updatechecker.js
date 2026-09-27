@@ -3,10 +3,7 @@ import { Alert, AppState } from 'react-native';
 import * as Updates from 'expo-updates';
 
 /**
- * Componente que verifica automaticamente se há uma nova atualização
- * publicada via EAS Update. Se houver, mostra um Alert perguntando
- * se o usuário quer atualizar agora.
- *
+
  * Como usar:
  * 1. Copie este arquivo para a raiz do seu projeto (ex: components/UpdateChecker.js)
  * 2. No seu App.js (ou app/_layout.tsx se usar expo-router), importe e renderize:
