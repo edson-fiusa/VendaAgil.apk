@@ -830,8 +830,6 @@ export default function Caixa({
       const agoraMs = Date.now();
       const expiraEm = agoraMs + TEMPO_EXPIRACAO_PIX_MS;
 
-      const dataExpiracaoIso = new Date(expiraEm).toISOString();
-
       const resposta = await fetch(
         'https://api.mercadopago.com/v1/payments',
         {
@@ -845,7 +843,6 @@ export default function Caixa({
             transaction_amount: Number(total.toFixed(2)),
             description: 'Venda PDV - Venda Ágil',
             payment_method_id: 'pix',
-            date_of_expiration: dataExpiracaoIso,
             payer: {
               email: emailCliente,
               first_name: operador?.nome || 'Cliente',

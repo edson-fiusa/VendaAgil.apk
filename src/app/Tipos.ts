@@ -28,4 +28,5 @@ export type TelaAdmin =
   | 'ia'
   | 'backup'
   | 'trocarSenha'
-  | 'logAtividades';
+  | 'logAtividades'
+  | 'feedback';

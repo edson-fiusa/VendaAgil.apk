@@ -6,9 +6,18 @@ import { PDFDocument } from 'pdf-lib-plus-encrypt';
 import { obterBanco } from '../../database/banco';
 
 const PASTA_BACKUP = `${FileSystem.documentDirectory}backups/`;
-const CAMINHO_BACKUP = `${PASTA_BACKUP}venda-agil-backup.json`;
+const CAMINHO_BACKUP = `${PASTA_BACKUP}venda-agil-backup.bkp`;
 const CAMINHO_METADADOS = `${PASTA_BACKUP}backup-info.json`;
-const CAMINHO_PRE_RESTAURACAO = `${PASTA_BACKUP}venda-agil-pre-restauracao.json`;
+const CAMINHO_PRE_RESTAURACAO = `${PASTA_BACKUP}venda-agil-pre-restauracao.bkp`;
+
+// Arquivos das versões anteriores (JSON em texto puro). São apagados
+// depois que o primeiro backup criptografado for concluído.
+const CAMINHOS_ANTIGOS_TEXTO_PURO = [
+  `${PASTA_BACKUP}venda-agil-backup.json`,
+  `${PASTA_BACKUP}venda-agil-pre-restauracao.json`,
+];
+
+const TAMANHO_MINIMO_SENHA_BACKUP = 6;
 
 // Todas as tabelas locais que fazem parte do backup.
 const TABELAS: string[] = [
@@ -45,11 +54,130 @@ async function garantirPastaBackup(): Promise<void> {
   }
 }
 
+// ============================================================
+// ARQUIVOS CRIPTOGRAFADOS (SQLCipher)
+//
+// O backup passa a ser um banco SQLite criptografado (AES-256) com
+// a senha escolhida pelo comerciante. O arquivo é independente da
+// chave do aparelho, então pode ser restaurado em outro celular.
+// Se a senha for esquecida, o backup NÃO tem como ser recuperado.
+// ============================================================
+
+function validarSenhaBackup(senha: string): void {
+  if (!senha || senha.length < TAMANHO_MINIMO_SENHA_BACKUP) {
+    throw new Error(
+      `Use uma senha de backup com pelo menos ${TAMANHO_MINIMO_SENHA_BACKUP} caracteres.`
+    );
+  }
+}
+
+/** O ATTACH do SQLite quer o caminho sem o prefixo file://. */
+function caminhoSql(uri: string): string {
+  return uri.replace(/^file:\/\//, '').replace(/'/g, "''");
+}
+
+function escaparSql(valor: string): string {
+  return valor.replace(/'/g, "''");
+}
+
+/**
+ * Anexa o arquivo criptografado à conexão principal (como "bkp"),
+ * executa a ação e sempre desanexa no final.
+ */
+async function comArquivoCifrado<T>(
+  uri: string,
+  senha: string,
+  acao: (db: Awaited<ReturnType<typeof obterBanco>>) => Promise<T>
+): Promise<T> {
+  const db = await obterBanco();
+
+  await db.execAsync(
+    `ATTACH DATABASE '${caminhoSql(uri)}' AS bkp KEY '${escaparSql(senha)}';`
+  );
+
+  try {
+    return await acao(db);
+  } finally {
+    try {
+      await db.execAsync('DETACH DATABASE bkp;');
+    } catch (erro) {
+      console.warn('Não foi possível desanexar o arquivo de backup:', erro);
+    }
+  }
+}
+
+/** Confere que o arquivo abre com a senha informada. */
+async function verificarArquivoCifrado(
+  uri: string,
+  senha: string
+): Promise<void> {
+  await comArquivoCifrado(uri, senha, async (db) => {
+    try {
+      await db.getFirstAsync('SELECT count(*) AS n FROM bkp.sqlite_master');
+    } catch {
+      throw new Error('Senha do backup incorreta ou arquivo inválido.');
+    }
+  });
+}
+
+/** Copia o banco atual para um arquivo novo, criptografado com a senha. */
+async function exportarParaArquivoCifrado(
+  destinoUri: string,
+  senha: string
+): Promise<void> {
+  // O destino precisa NÃO existir, senão o export duplicaria os dados.
+  await FileSystem.deleteAsync(destinoUri, { idempotent: true });
+
+  await comArquivoCifrado(destinoUri, senha, async (db) => {
+    await db.execAsync(`SELECT sqlcipher_export('bkp');`);
+  });
+}
+
+/** Lê todas as tabelas de um arquivo criptografado. */
+async function lerDadosDoArquivoCifrado(
+  uri: string,
+  senha: string
+): Promise<DadosBackup> {
+  return comArquivoCifrado(uri, senha, async (db) => {
+    try {
+      await db.getFirstAsync('SELECT count(*) AS n FROM bkp.sqlite_master');
+    } catch {
+      throw new Error('Senha do backup incorreta ou arquivo inválido.');
+    }
+
+    const tabelas: Record<string, any[]> = {};
+
+    for (const tabela of TABELAS) {
+      try {
+        tabelas[tabela] = await db.getAllAsync(`SELECT * FROM bkp.${tabela}`);
+      } catch (erro) {
+        console.warn(`Tabela ${tabela} ausente no backup:`, erro);
+        tabelas[tabela] = [];
+      }
+    }
+
+    return {
+      versao: 2,
+      criadoEm: new Date().toISOString(),
+      tabelas,
+    };
+  });
+}
+
+async function apagarArquivosAntigosEmTextoPuro(): Promise<void> {
+  for (const caminho of CAMINHOS_ANTIGOS_TEXTO_PURO) {
+    try {
+      await FileSystem.deleteAsync(caminho, { idempotent: true });
+    } catch (erro) {
+      console.warn('Não foi possível apagar arquivo antigo de backup:', erro);
+    }
+  }
+}
+
 /**
  * Lê todas as linhas de todas as tabelas locais do banco e monta um
- * objeto único, pronto para ser salvo como JSON. Usa a mesma conexão
- * (obterBanco) que o resto do aplicativo já usa, então não depende de
- * localizar o arquivo físico do banco no sistema de arquivos.
+ * objeto único. Usado pelo relatório em PDF. Usa a mesma conexão
+ * (obterBanco) que o resto do aplicativo já usa.
  */
 async function exportarDados(): Promise<DadosBackup> {
   const db = await obterBanco();
@@ -61,8 +189,8 @@ async function exportarDados(): Promise<DadosBackup> {
       tabelas[tabela] = await db.getAllAsync(`SELECT * FROM ${tabela}`);
     } catch (erro) {
       // Se a tabela ainda não existir por algum motivo, trata como vazia
-      // em vez de interromper todo o backup.
-      console.warn(`Não foi possível ler a tabela ${tabela} para o backup:`, erro);
+      // em vez de interromper todo o relatório.
+      console.warn(`Não foi possível ler a tabela ${tabela}:`, erro);
       tabelas[tabela] = [];
     }
   }
@@ -112,23 +240,22 @@ async function importarDados(dados: DadosBackup): Promise<void> {
 }
 
 /**
- * Faz um backup dos dados do aplicativo, salvando-os como um arquivo
- * JSON dentro da pasta de backups do próprio celular. Não depende de
- * servidor/internet.
+ * Faz um backup criptografado dos dados do aplicativo, salvo na pasta
+ * de backups do próprio celular. Não depende de servidor/internet.
+ *
+ * @param senha Senha escolhida pelo comerciante (mínimo 6 caracteres).
  */
-export async function fazerBackupLocal(): Promise<BackupInfo> {
+export async function fazerBackupLocal(senha: string): Promise<BackupInfo> {
+  validarSenhaBackup(senha);
+
   await garantirPastaBackup();
 
-  const dados = await exportarDados();
-
-  const conteudo = JSON.stringify(dados);
-
   // Escreve primeiro em um arquivo temporário. Só substitui o backup
-  // anterior se a escrita for concluída com sucesso, para nunca ficar
-  // sem nenhum backup válido no meio do caminho.
+  // anterior se a escrita for concluída e o arquivo abrir com a senha,
+  // para nunca ficar sem nenhum backup válido no meio do caminho.
   const caminhoTemporario = `${CAMINHO_BACKUP}.tmp`;
 
-  await FileSystem.writeAsStringAsync(caminhoTemporario, conteudo);
+  await exportarParaArquivoCifrado(caminhoTemporario, senha);
 
   const infoTemporario = await FileSystem.getInfoAsync(caminhoTemporario);
 
@@ -136,13 +263,9 @@ export async function fazerBackupLocal(): Promise<BackupInfo> {
     throw new Error('Não foi possível gravar o arquivo de backup.');
   }
 
-  const existeBackupAtual = (
-    await FileSystem.getInfoAsync(CAMINHO_BACKUP)
-  ).exists;
+  await verificarArquivoCifrado(caminhoTemporario, senha);
 
-  if (existeBackupAtual) {
-    await FileSystem.deleteAsync(CAMINHO_BACKUP, { idempotent: true });
-  }
+  await FileSystem.deleteAsync(CAMINHO_BACKUP, { idempotent: true });
 
   await FileSystem.moveAsync({
     from: caminhoTemporario,
@@ -151,7 +274,7 @@ export async function fazerBackupLocal(): Promise<BackupInfo> {
 
   const metadados: BackupInfo = {
     existe: true,
-    data: dados.criadoEm,
+    data: new Date().toISOString(),
     tamanho: infoTemporario.size,
     arquivo: CAMINHO_BACKUP,
   };
@@ -160,6 +283,8 @@ export async function fazerBackupLocal(): Promise<BackupInfo> {
     CAMINHO_METADADOS,
     JSON.stringify(metadados)
   );
+
+  await apagarArquivosAntigosEmTextoPuro();
 
   return metadados;
 }
@@ -195,11 +320,12 @@ export async function obterInfoBackupLocal(): Promise<BackupInfo> {
 
 /**
  * Restaura os dados do aplicativo a partir do último backup salvo no
- * celular. Antes de sobrescrever, guarda uma cópia de segurança dos
- * dados atuais (CAMINHO_PRE_RESTAURACAO), para o caso de algo dar
- * errado.
+ * celular. Antes de sobrescrever, guarda uma cópia de segurança (também
+ * criptografada, com a mesma senha) dos dados atuais.
+ *
+ * @param senha A senha usada quando o backup foi feito.
  */
-export async function restaurarBackupLocal(): Promise<void> {
+export async function restaurarBackupLocal(senha: string): Promise<void> {
   const infoBackup = await FileSystem.getInfoAsync(CAMINHO_BACKUP);
 
   if (!infoBackup.exists) {
@@ -208,17 +334,12 @@ export async function restaurarBackupLocal(): Promise<void> {
 
   await garantirPastaBackup();
 
-  const conteudoBackup = await FileSystem.readAsStringAsync(CAMINHO_BACKUP);
-  const dadosBackup: DadosBackup = JSON.parse(conteudoBackup);
+  // Falha aqui (senha errada) antes de tocar em qualquer dado atual.
+  const dadosBackup = await lerDadosDoArquivoCifrado(CAMINHO_BACKUP, senha);
 
   // Guarda uma cópia de segurança dos dados atuais antes de sobrescrever.
   try {
-    const dadosAtuais = await exportarDados();
-
-    await FileSystem.writeAsStringAsync(
-      CAMINHO_PRE_RESTAURACAO,
-      JSON.stringify(dadosAtuais)
-    );
+    await exportarParaArquivoCifrado(CAMINHO_PRE_RESTAURACAO, senha);
   } catch (erro) {
     console.warn('Não foi possível salvar cópia pré-restauração:', erro);
   }
@@ -227,14 +348,10 @@ export async function restaurarBackupLocal(): Promise<void> {
 }
 
 /**
- * Abre a folha de compartilhamento nativa do aparelho (a mesma usada
- * para compartilhar fotos, por exemplo) apontando para o arquivo de
- * backup local. A partir dela o operador escolhe para onde enviar:
- * e-mail (Gmail, Outlook...), Google Drive, WhatsApp, Telegram,
- * "Salvar em arquivos", Bluetooth etc.
- *
- * Isso tira o backup do aparelho, sem o app precisar guardar
- * credenciais de e-mail nem depender de um servidor próprio.
+ * Abre a folha de compartilhamento nativa do aparelho apontando para o
+ * arquivo de backup (que já está criptografado). A partir dela o
+ * operador escolhe para onde enviar: e-mail, Google Drive, WhatsApp,
+ * "Salvar em arquivos" etc.
  *
  * Requer o pacote expo-sharing (`npx expo install expo-sharing`).
  */
@@ -256,20 +373,19 @@ export async function compartilharBackupLocal(): Promise<void> {
   }
 
   await Sharing.shareAsync(CAMINHO_BACKUP, {
-    mimeType: 'application/json',
+    mimeType: 'application/octet-stream',
     dialogTitle: 'Enviar backup do Venda Ágil',
-    UTI: 'public.json',
+    UTI: 'public.data',
   });
 }
 
 // ============================================================
 // RELATÓRIO EM PDF
 //
-// Isto é SEPARADO do backup em JSON acima. O JSON continua sendo
-// a única coisa usada por restaurarBackupLocal() para reconstruir
-// o banco. O PDF aqui é só um relatório legível, pra imprimir ou
-// enviar por e-mail/WhatsApp — não é possível "restaurar" um PDF
-// de volta no banco.
+// Isto é SEPARADO do backup acima. O backup é a única coisa usada por
+// restaurarBackupLocal() para reconstruir o banco. O PDF aqui é só um
+// relatório legível, pra imprimir ou enviar por e-mail/WhatsApp — não
+// é possível "restaurar" um PDF de volta no banco.
 //
 // Requer o pacote expo-print (`npx expo install expo-print`).
 //
@@ -625,10 +741,30 @@ async function criptografarPdfBase64(
 }
 
 /**
+ * Apaga relatórios PDF gerados antes, para não acumular na pasta do app
+ * cópias em texto claro (quando gerados sem senha) de todas as vendas.
+ */
+async function limparRelatoriosAntigos(): Promise<void> {
+  try {
+    const nomes = await FileSystem.readDirectoryAsync(PASTA_BACKUP);
+
+    for (const nome of nomes) {
+      if (nome.startsWith('venda-agil-relatorio-') && nome.endsWith('.pdf')) {
+        await FileSystem.deleteAsync(`${PASTA_BACKUP}${nome}`, {
+          idempotent: true,
+        });
+      }
+    }
+  } catch (erro) {
+    console.warn('Não foi possível limpar relatórios antigos:', erro);
+  }
+}
+
+/**
  * Gera um relatório em PDF (legível por humanos) com os dados atuais
  * do aplicativo: produtos, operadores, vendas e avarias. Diferente do
- * backup em JSON, este PDF NÃO pode ser usado para restaurar dados —
- * serve só para leitura, impressão ou envio.
+ * backup, este PDF NÃO pode ser usado para restaurar dados — serve só
+ * para leitura, impressão ou envio.
  *
  * @param senha Opcional. Se informada, o PDF é criptografado com essa
  * senha (o app deve chamar `validarSenhaPdf` do módulo `senhaPdf.ts`
@@ -664,6 +800,7 @@ export async function gerarRelatorioPdfLocal(senha?: string): Promise<string> {
     : base64;
 
   await garantirPastaBackup();
+  await limparRelatoriosAntigos();
 
   const nomeArquivo = `venda-agil-relatorio-${Date.now()}.pdf`;
   const destino = `${PASTA_BACKUP}${nomeArquivo}`;

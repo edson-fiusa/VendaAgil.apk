@@ -1,11 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
+import { lerTokenMP } from '../Armazenamentoseguro';
 import { formatarTempoRestante, gerarIdempotencyKey } from './FormatacaoCaixa';
-
-
-
-const MP_ACCESS_TOKEN = process.env
-  .EXPO_PUBLIC_MP_ACCESS_TOKEN as string;
 
 const STATUS_FINAIS_ERRO = [
   'cancelled',
@@ -16,7 +12,12 @@ const STATUS_FINAIS_ERRO = [
 
 const MAX_FALHAS_CONSULTA_PIX = 5;
 const TEMPO_AVISO_DEMORA_MS = 45_000;
-const TEMPO_EXPIRACAO_PIX_MS = 4 * 60 * 1000; // 4 minutos
+const TEMPO_EXPIRACAO_PIX_MS = 2 * 60 * 1000; // controle só local
+
+// Mude para true se quiser voltar a forçar um pagador fixo nos testes.
+const USAR_PAYER_DE_TESTE = false;
+const PAYER_TESTE_EMAIL = 'comprador123@teste.com';
+const PAYER_TESTE_NOME = 'Cliente';
 
 interface UsePixParams {
   temItensNoCarrinho: boolean;
@@ -24,18 +25,11 @@ interface UsePixParams {
   operador: any;
   caixa: any;
   mostrarToast: (mensagem: string) => void;
-  // Chamado quando o Mercado Pago confirma o pagamento. Quem
-  // decide o que fazer com a venda (gravar no banco local,
-  // limpar carrinho, mostrar cupom etc.) é quem usa este hook.
   aoAprovar: (mercadoPagoId: string) => Promise<void>;
+  /** Chamado quando não há token salvo (abra a tela de configuração). */
+  aoFaltarToken?: () => void;
 }
 
-/**
- * Hook com toda a lógica de cobrança via PIX (Mercado Pago):
- * gerar o QR Code, ficar consultando o status a cada poucos
- * segundos, avisar quando está demorando, expirar automaticamente
- * e permitir cancelamento manual.
- */
 export function usePix({
   temItensNoCarrinho,
   total,
@@ -43,6 +37,7 @@ export function usePix({
   caixa,
   mostrarToast,
   aoAprovar,
+  aoFaltarToken,
 }: UsePixParams) {
   const [pix, setPix] = useState<any>(null);
   const [pixCarregando, setPixCarregando] = useState(false);
@@ -72,6 +67,10 @@ export function usePix({
   const pixProcessandoRef = useRef(false);
   const falhasConsultaRef = useRef(0);
 
+  // Token lido do SecureStore, mantido só em memória durante o PIX
+  // para não reler o armazenamento a cada consulta (3 em 3 segundos).
+  const tokenRef = useRef<string | null>(null);
+
   function limparTimersPix() {
     if (pixIntervalRef.current) {
       clearInterval(pixIntervalRef.current);
@@ -94,11 +93,10 @@ export function usePix({
     }
   }
 
-  // Limpa os timers automaticamente se quem usa este hook for
-  // desmontado (ex.: operador sai do caixa com um PIX em aberto).
   useEffect(() => {
     return () => {
       limparTimersPix();
+      tokenRef.current = null;
     };
   }, []);
 
@@ -134,7 +132,7 @@ export function usePix({
     }, Math.max(0, expiraEm - Date.now()));
   }
 
-    async function gerarPix() {
+  async function gerarPix() {
     if (!temItensNoCarrinho) {
       mostrarToast('Adicione produtos ao carrinho.');
       return;
@@ -142,14 +140,6 @@ export function usePix({
 
     if (total <= 0) {
       mostrarToast('Valor da venda inválido.');
-      return;
-    }
-
-    if (!MP_ACCESS_TOKEN) {
-      setPixErro(
-        'Token do Mercado Pago não configurado. Defina ' +
-          'EXPO_PUBLIC_MP_ACCESS_TOKEN no .env do app.'
-      );
       return;
     }
 
@@ -164,32 +154,38 @@ export function usePix({
 
       limparTimersPix();
 
-      const emailCliente =
-        operador?.email || 'cliente@vendaagil.com';
+      const token = await lerTokenMP();
 
-      const nomeCliente = operador?.nome || 'Cliente';
-
-      if (nomeCliente.trim().toUpperCase() === 'APRO') {
-        console.log(
-          '⚠️ ATENÇÃO: payer.first_name está como "APRO". ' +
-            'Esse valor é um gatilho de TESTE do Mercado Pago.'
+      if (!token) {
+        tokenRef.current = null;
+        setPixErro(
+          'Token do Mercado Pago não configurado. Cadastre o token ' +
+            'nas configurações do app.'
         );
+        aoFaltarToken?.();
+        return;
       }
 
-      // Cálculo correto usando a constante global de 4 minutos (ou altere para 2 se preferir)
-      const agoraMs = Date.now();
-      const expiraEm = agoraMs + TEMPO_EXPIRACAO_PIX_MS;
+      tokenRef.current = token;
 
-      const dataExpiracaoIso = new Date(expiraEm)
-        .toISOString()
-        .replace('Z', '+00:00');
+      const emailCliente = USAR_PAYER_DE_TESTE
+        ? PAYER_TESTE_EMAIL
+        : operador?.email || 'cliente@vendaagil.com';
 
+      const nomeCliente = USAR_PAYER_DE_TESTE
+        ? PAYER_TESTE_NOME
+        : operador?.nome || 'Cliente';
+
+      const expiraEm = Date.now() + TEMPO_EXPIRACAO_PIX_MS;
+
+      // Não enviamos "date_of_expiration" ao Mercado Pago (isso fazia o
+      // PIX nascer vencido). O prazo na tela é só o temporizador local.
       const resposta = await fetch(
         'https://api.mercadopago.com/v1/payments',
         {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
+            Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json',
             'X-Idempotency-Key': gerarIdempotencyKey(),
           },
@@ -197,7 +193,6 @@ export function usePix({
             transaction_amount: Number(total.toFixed(2)),
             description: 'Venda PDV - Venda Ágil',
             payment_method_id: 'pix',
-            date_of_expiration: dataExpiracaoIso,
             payer: {
               email: emailCliente,
               first_name: nomeCliente,
@@ -240,14 +235,6 @@ export function usePix({
           'O Mercado Pago não retornou o ID do pagamento.'
         );
       }
-
-      console.log(
-        '[PIX] Pagamento criado:',
-        'id=' + mercadoPagoId,
-        'status=' + dados.status,
-        'status_detail=' + dados.status_detail,
-        'live_mode=' + dados.live_mode
-      );
 
       const transactionData =
         dados?.point_of_interaction?.transaction_data;
@@ -295,7 +282,6 @@ export function usePix({
       setPixCarregando(false);
     }
   }
-  
 
   async function verificarPagamentoPix(
     mercadoPagoId: string,
@@ -305,21 +291,25 @@ export function usePix({
       return;
     }
 
-    if (!MP_ACCESS_TOKEN) {
-      return;
-    }
-
     try {
       if (manual) {
         setPixVerificando(true);
       }
+
+      const token = tokenRef.current ?? (await lerTokenMP());
+
+      if (!token) {
+        return;
+      }
+
+      tokenRef.current = token;
 
       const resposta = await fetch(
         `https://api.mercadopago.com/v1/payments/${mercadoPagoId}`,
         {
           method: 'GET',
           headers: {
-            Authorization: `Bearer ${MP_ACCESS_TOKEN}`,
+            Authorization: `Bearer ${token}`,
           },
         }
       );
@@ -343,28 +333,16 @@ export function usePix({
 
       const status = String(dados?.status ?? '').toLowerCase();
 
-      // Log de diagnóstico: mostra a resposta completa que o
-      // Mercado Pago devolveu nesta consulta. Se o pagamento
-      // aparecer "approved" segundos depois de criado, sem
-      // ninguém ter escaneado o QR Code, olhe aqui:
-      // - live_mode: false  → é um pagamento de TESTE (sandbox),
-      //   não um pagamento real. O token usado não é o de
-      //   produção, ou a conta está em modo de teste.
-      // - status_detail: "accredited" num pagamento criado há
-      //   poucos segundos, com live_mode false, confirma que foi
-      //   uma simulação do Mercado Pago, não um pagamento real.
-      console.log(
-        '[PIX] Consulta de status:',
-        'id=' + mercadoPagoId,
-        'status=' + status,
-        'status_detail=' + dados?.status_detail,
-        'live_mode=' + dados?.live_mode
-      );
-
       if (STATUS_FINAIS_ERRO.includes(status)) {
         limparTimersPix();
 
-        setPixErro(`Pagamento PIX não aprovado. Status: ${status}`);
+        const detalhe = dados?.status_detail
+          ? ` | motivo: ${dados.status_detail}`
+          : '';
+
+        setPixErro(
+          `Pagamento PIX não aprovado. Status: ${status}${detalhe}`
+        );
         return;
       }
 
@@ -393,8 +371,6 @@ export function usePix({
         );
       }
     } catch (erro: any) {
-      console.error('ERRO AO CONSULTAR PAGAMENTO PIX:', erro);
-
       falhasConsultaRef.current += 1;
 
       if (manual) {
@@ -408,10 +384,10 @@ export function usePix({
 
         setPixErro(
           'Não foi possível confirmar automaticamente o pagamento PIX ' +
-          '(falha ao consultar o Mercado Pago repetidamente).\n\n' +
-          'Verifique o status desse pagamento no aplicativo/site do ' +
-          'Mercado Pago antes de repetir a cobrança, para não cobrar o ' +
-          'cliente duas vezes.'
+            '(falha ao consultar o Mercado Pago repetidamente).\n\n' +
+            'Verifique o status desse pagamento no aplicativo/site do ' +
+            'Mercado Pago antes de repetir a cobrança, para não cobrar o ' +
+            'cliente duas vezes.'
         );
       }
     } finally {
@@ -426,6 +402,7 @@ export function usePix({
 
     pixProcessandoRef.current = false;
     falhasConsultaRef.current = 0;
+    tokenRef.current = null;
 
     setPix(null);
     setPixErro('');
@@ -435,11 +412,6 @@ export function usePix({
     setPixTempoRestante('');
   }
 
-  // Usado por quem chama este hook quando a gravação da venda no
-  // banco local falha DEPOIS do Mercado Pago já ter aprovado o
-  // pagamento: libera a trava de processamento sem apagar o QR
-  // Code/estado do PIX (o dinheiro já entrou; o operador pode
-  // tentar gravar a venda de novo sem gerar um PIX novo).
   function liberarProcessamentoPix() {
     pixProcessandoRef.current = false;
   }

@@ -16,6 +16,7 @@ import type { TelaAdmin } from './Tipos';
 
 import Avarias from './avarias';
 import CadastroProduto from './cadastro-produto';
+import Feedback from '../app/Feedbackapp';
 import GerenciarOperadores from './gerenciar-operadores';
 import GerenciarProdutos from './gerenciar-produtos';
 import IA from './ia';
@@ -44,6 +45,7 @@ const ITENS_MENU: ItemMenu[] = [
   { chave: 'backup', titulo: 'Backup e restauração', icone: '💾' },
   { chave: 'trocarSenha', titulo: 'Trocar senha', icone: '🔑' },
   { chave: 'logAtividades', titulo: 'Log de atividades', icone: '📋' },
+  { chave: 'feedback', titulo: 'Enviar feedback', icone: '💬' },
 ];
 
 interface PainelAdminProps {
@@ -113,6 +115,7 @@ export function PainelAdmin({
       backup: '💾 Backup e Restauração',
       trocarSenha: '🔑 Trocar senha do admin',
       logAtividades: '📋 Log de atividades',
+      feedback: '💬 Enviar feedback',
     };
 
     return (
@@ -138,6 +141,7 @@ export function PainelAdmin({
         {telaAdmin === 'backup' && <Backup />}
         {telaAdmin === 'trocarSenha' && <TrocarSenha />}
         {telaAdmin === 'logAtividades' && <LogAtividades />}
+        {telaAdmin === 'feedback' && <Feedback />}
       </SafeAreaView>
     );
   }
