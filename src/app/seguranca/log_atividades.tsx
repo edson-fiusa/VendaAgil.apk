@@ -20,6 +20,8 @@ import {
 
 const ROTULOS_TIPO: Record<string, string> = {
   login: '🔑 Login',
+  login_falhou: '⛔ Tentativa de login falhou',
+  login_bloqueado: '🔒 Login bloqueado temporariamente',
   logout: '🚪 Saída',
   produto_cadastrado: '📦 Produto cadastrado',
   produto_editado: '✏️ Produto editado',
@@ -36,6 +38,10 @@ const ROTULOS_TIPO: Record<string, string> = {
   backup_restaurado: '♻️ Backup restaurado',
   outro: '📌 Outro',
 };
+
+// Tipos que merecem destaque visual (vermelho), por indicarem
+// tentativa de acesso incorreta ou bloqueio de segurança.
+const TIPOS_DE_ALERTA = new Set(['login_falhou', 'login_bloqueado']);
 
 function formatarData(dataIso: string): string {
   const data = new Date(dataIso);
@@ -56,6 +62,7 @@ export default function LogAtividades() {
   const [carregando, setCarregando] = useState(true);
   const [atualizando, setAtualizando] = useState(false);
   const [filtro, setFiltro] = useState('');
+  const [somenteAlertas, setSomenteAlertas] = useState(false);
 
   const [idsExpandidos, setIdsExpandidos] =
     useState<Set<number>>(new Set());
@@ -130,14 +137,15 @@ export default function LogAtividades() {
 
   const termo = filtro.trim().toLowerCase();
 
-  const logsFiltrados = termo
-    ? logs.filter(
-        (log) =>
-          log.usuario.toLowerCase().includes(termo) ||
-          log.descricao.toLowerCase().includes(termo) ||
-          log.tipo.toLowerCase().includes(termo)
-      )
-    : logs;
+  const logsFiltrados = logs
+    .filter((log) => !somenteAlertas || TIPOS_DE_ALERTA.has(log.tipo))
+    .filter(
+      (log) =>
+        !termo ||
+        log.usuario.toLowerCase().includes(termo) ||
+        log.descricao.toLowerCase().includes(termo) ||
+        log.tipo.toLowerCase().includes(termo)
+    );
 
   if (carregando) {
     return (
@@ -171,6 +179,23 @@ export default function LogAtividades() {
         </TouchableOpacity>
       </View>
 
+      <TouchableOpacity
+        style={[
+          styles.filtroAlerta,
+          somenteAlertas && styles.filtroAlertaAtivo,
+        ]}
+        onPress={() => setSomenteAlertas((atual) => !atual)}
+      >
+        <Text
+          style={[
+            styles.filtroAlertaTexto,
+            somenteAlertas && styles.filtroAlertaTextoAtivo,
+          ]}
+        >
+          ⛔ Mostrar só tentativas erradas e bloqueios
+        </Text>
+      </TouchableOpacity>
+
       <FlatList
         data={logsFiltrados}
         keyExtractor={(item) => String(item.id)}
@@ -189,17 +214,23 @@ export default function LogAtividades() {
         }
         renderItem={({ item }) => {
           const expandido = idsExpandidos.has(item.id);
+          const alerta = TIPOS_DE_ALERTA.has(item.tipo);
 
           return (
             <TouchableOpacity
-              style={styles.item}
+              style={[styles.item, alerta && styles.itemAlerta]}
               activeOpacity={0.7}
               onPress={() =>
                 alternarExpandido(item.id)
               }
             >
               <View style={styles.itemTopo}>
-                <Text style={styles.itemTipo}>
+                <Text
+                  style={[
+                    styles.itemTipo,
+                    alerta && styles.itemTipoAlerta,
+                  ]}
+                >
                   {ROTULOS_TIPO[item.tipo] || item.tipo}
                 </Text>
 
@@ -334,6 +365,29 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
 
+  filtroAlerta: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#f3f4f6',
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    marginBottom: 12,
+  },
+
+  filtroAlertaAtivo: {
+    backgroundColor: '#fee2e2',
+  },
+
+  filtroAlertaTexto: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#6b7280',
+  },
+
+  filtroAlertaTextoAtivo: {
+    color: '#b91c1c',
+  },
+
   lista: {
     paddingBottom: 40,
   },
@@ -351,6 +405,12 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 10,
     elevation: 1,
+  },
+
+  itemAlerta: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#dc2626',
+    backgroundColor: '#fef2f2',
   },
 
   itemTopo: {
@@ -371,6 +431,10 @@ const styles = StyleSheet.create({
     color: '#111827',
     flexShrink: 1,
     paddingRight: 8,
+  },
+
+  itemTipoAlerta: {
+    color: '#b91c1c',
   },
 
   itemData: {

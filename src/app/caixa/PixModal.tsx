@@ -1,6 +1,7 @@
 import {
     ActivityIndicator,
     Modal,
+    ScrollView,
     StyleSheet,
     Text,
     TouchableOpacity,
@@ -58,86 +59,91 @@ export function PixModal({
     >
       <View style={estilosModais.modalFundo}>
         <View style={estilos.modalPix}>
-          <Text style={estilos.modalTitulo}>Pagamento PIX</Text>
-
-          <Text style={estilos.modalValor}>{fmt(total)}</Text>
-
-          {pixErro ? (
-            <Text style={estilos.erroPix}>{pixErro}</Text>
-          ) : pixPago ? (
-            <View style={estilos.pixAprovado}>
-              <Text style={estilos.pixAprovadoIcone}>✓</Text>
-
-              <Text style={estilos.pixAprovadoTexto}>
-                Pagamento aprovado
-              </Text>
-            </View>
-          ) : (
-            <>
-              {codigoPix ? (
-                <View style={estilos.qrContainer}>
-                  {String(codigoPix).length < 5000 ? (
-                    <QRCode value={String(codigoPix)} size={220} />
-                  ) : (
-                    <Text style={estilos.erroPix}>
-                      QR Code indisponível
-                    </Text>
-                  )}
-                </View>
-              ) : (
-                <ActivityIndicator size="large" color="#2563eb" />
-              )}
-
-              <Text style={estilos.pixAguardando}>
-                Aguardando pagamento...
-              </Text>
-
-              {!!pixExpiraEm && !!pixTempoRestante && (
-                <Text style={estilos.pixExpiracaoTexto}>
-                  Expira em {pixTempoRestante}
-                </Text>
-              )}
-
-              {pixAvisoDemora && (
-                <Text style={estilos.pixAvisoDemoraTexto}>
-                  Está demorando mais que o normal. Se o cliente já
-                  pagou, toque em "Já paguei" abaixo para confirmar
-                  manualmente.
-                </Text>
-              )}
-
-              {!!codigoPix && (
-                <Text selectable style={estilos.pixCopiaCola}>
-                  {String(codigoPix)}
-                </Text>
-              )}
-
-              {!!pix?.mercadoPagoId && (
-                <TouchableOpacity
-                  style={estilos.botaoVerificarPix}
-                  onPress={() =>
-                    onVerificarAgora(String(pix.mercadoPagoId))
-                  }
-                  disabled={pixVerificando}
-                >
-                  {pixVerificando ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={estilos.botaoVerificarPixTexto}>
-                      Já paguei, verificar agora
-                    </Text>
-                  )}
-                </TouchableOpacity>
-              )}
-            </>
-          )}
-
-          <TouchableOpacity
-            style={estilos.botaoFecharModal}
-            onPress={onFechar}
+          <ScrollView
+            contentContainerStyle={estilos.conteudoScroll}
+            showsVerticalScrollIndicator={false}
           >
-            <Text style={estilos.botaoFecharModalTexto}>Fechar</Text>
-          </TouchableOpacity>
+            <Text style={estilos.modalTitulo}>Pagamento PIX</Text>
+
+            <Text style={estilos.modalValor}>{fmt(total)}</Text>
+
+            {pixErro ? (
+              <Text style={estilos.erroPix}>{pixErro}</Text>
+            ) : pixPago ? (
+              <View style={estilos.pixAprovado}>
+                <Text style={estilos.pixAprovadoIcone}>✓</Text>
+
+                <Text style={estilos.pixAprovadoTexto}>
+                  Pagamento aprovado
+                </Text>
+              </View>
+            ) : (
+              <>
+                {codigoPix ? (
+                  <View style={estilos.qrContainer}>
+                    {String(codigoPix).length < 5000 ? (
+                      <QRCode value={String(codigoPix)} size={220} />
+                    ) : (
+                      <Text style={estilos.erroPix}>
+                        QR Code indisponível
+                      </Text>
+                    )}
+                  </View>
+                ) : (
+                  <ActivityIndicator size="large" color="#2563eb" />
+                )}
+
+                <Text style={estilos.pixAguardando}>
+                  Aguardando pagamento...
+                </Text>
+
+                {!!pixExpiraEm && !!pixTempoRestante && (
+                  <Text style={estilos.pixExpiracaoTexto}>
+                    Expira em {pixTempoRestante}
+                  </Text>
+                )}
+
+                {pixAvisoDemora && (
+                  <Text style={estilos.pixAvisoDemoraTexto}>
+                    Está demorando mais que o normal. Se o cliente já
+                    pagou, toque em "Já paguei" abaixo para confirmar
+                    manualmente.
+                  </Text>
+                )}
+
+                {!!codigoPix && (
+                  <Text selectable style={estilos.pixCopiaCola}>
+                    {String(codigoPix)}
+                  </Text>
+                )}
+
+                {!!pix?.mercadoPagoId && (
+                  <TouchableOpacity
+                    style={estilos.botaoVerificarPix}
+                    onPress={() =>
+                      onVerificarAgora(String(pix.mercadoPagoId))
+                    }
+                    disabled={pixVerificando}
+                  >
+                    {pixVerificando ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <Text style={estilos.botaoVerificarPixTexto}>
+                        Já paguei, verificar agora
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                )}
+              </>
+            )}
+
+            <TouchableOpacity
+              style={estilos.botaoFecharModal}
+              onPress={onFechar}
+            >
+              <Text style={estilos.botaoFecharModalTexto}>Fechar</Text>
+            </TouchableOpacity>
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -148,9 +154,16 @@ const estilos = StyleSheet.create({
   modalPix: {
     width: '100%',
     maxWidth: 450,
+    // Antes o modal crescia livremente e, em telas baixas (celular
+    // ou tablet deitado), o conteúdo era cortado sem como rolar.
+    // Agora ele tem um teto de altura e o conteúdo rola dentro dele.
+    maxHeight: '90%',
     backgroundColor: '#fff',
     borderRadius: 15,
     padding: 20,
+  },
+
+  conteudoScroll: {
     alignItems: 'center',
   },
 

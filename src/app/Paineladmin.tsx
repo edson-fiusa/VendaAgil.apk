@@ -24,6 +24,7 @@ import Relatorios from './relatorios';
 import Backup from '../database/backup';
 import LogAtividades from './seguranca/log_atividades';
 import TrocarSenha from './seguranca/trocar-senha';
+import { TelaTokenMercadoPago } from '../app/Telatokenmercadopago';
 
 // ============================================================
 // ITENS DO MENU (dados usados para montar a grade de cards)
@@ -46,6 +47,7 @@ const ITENS_MENU: ItemMenu[] = [
   { chave: 'trocarSenha', titulo: 'Trocar senha', icone: '🔑' },
   { chave: 'logAtividades', titulo: 'Log de atividades', icone: '📋' },
   { chave: 'feedback', titulo: 'Enviar feedback', icone: '💬' },
+  { chave: 'configMercadoPago', titulo: 'Mercado Pago', icone: '💳' },
 ];
 
 interface PainelAdminProps {
@@ -116,6 +118,7 @@ export function PainelAdmin({
       trocarSenha: '🔑 Trocar senha do admin',
       logAtividades: '📋 Log de atividades',
       feedback: '💬 Enviar feedback',
+      configMercadoPago: '💳 Configurar Mercado Pago',
     };
 
     return (
@@ -142,6 +145,16 @@ export function PainelAdmin({
         {telaAdmin === 'trocarSenha' && <TrocarSenha />}
         {telaAdmin === 'logAtividades' && <LogAtividades />}
         {telaAdmin === 'feedback' && <Feedback />}
+
+        {telaAdmin === 'configMercadoPago' && (
+          // "visivel" fica sempre true aqui porque a própria tela
+          // interna do painel já controla a exibição (o "if" acima).
+          // "aoFechar" volta pro menu de cards, igual ao "← Voltar".
+          <TelaTokenMercadoPago
+            visivel
+            aoFechar={() => setTelaAdmin('menu')}
+          />
+        )}
       </SafeAreaView>
     );
   }

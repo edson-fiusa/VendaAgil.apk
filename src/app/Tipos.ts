@@ -29,4 +29,5 @@ export type TelaAdmin =
   | 'backup'
   | 'trocarSenha'
   | 'logAtividades'
-  | 'feedback';
+  | 'feedback'
+  | 'configMercadoPago';

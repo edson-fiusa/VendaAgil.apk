@@ -13,11 +13,126 @@ import type {
   TelaLogin,
 } from './Tipos';
 
+// ============================================================
+// BLOQUEIO POR TENTATIVAS ERRADAS
+//
+// As duas primeiras tentativas erradas não têm espera nenhuma.
+// A partir da 3ª, cada nova tentativa errada aumenta o tempo de
+// espera obrigatório antes da próxima tentativa. O contador e o
+// horário de liberação ficam salvos em configuracao_local (via
+// obterConfig/salvarConfig), então sobrevivem a fechar o app.
+// ============================================================
+
+const TENTATIVAS_SEM_ESPERA = 2;
+
+const ESPERAS_SEGUNDOS = [10, 30, 60, 120, 300];
+
+function calcularEsperaSegundos(totalFalhas: number): number {
+  const indice = totalFalhas - TENTATIVAS_SEM_ESPERA - 1;
+
+  if (indice < 0) {
+    return 0;
+  }
+
+  return ESPERAS_SEGUNDOS[Math.min(indice, ESPERAS_SEGUNDOS.length - 1)];
+}
+
+function formatarEspera(segundos: number): string {
+  if (segundos < 60) {
+    return `${segundos} segundo${segundos === 1 ? '' : 's'}`;
+  }
+
+  const minutos = Math.ceil(segundos / 60);
+  return `${minutos} minuto${minutos === 1 ? '' : 's'}`;
+}
+
+async function lerNumeroConfig(chave: string): Promise<number> {
+  const valor = await obterConfig(chave);
+  const numero = Number(valor);
+  return Number.isFinite(numero) ? numero : 0;
+}
+
+async function lerDataConfig(chave: string): Promise<Date | null> {
+  const valor = await obterConfig(chave);
+
+  if (!valor) {
+    return null;
+  }
+
+  const data = new Date(valor);
+  return Number.isNaN(data.getTime()) ? null : data;
+}
+
 /**
- * Hook que controla a navegação entre telas (login / admin / caixa)
- * e toda a lógica de autenticação: login do administrador, login
- * do operador de caixa (com abertura/retomada do caixa) e logout.
+ * Verifica se o bloqueio (identificado por chaveEscopo, ex.: "admin"
+ * ou "caixa_joao") ainda está em vigor.
+ *
+ * Retorna os segundos restantes (0 se não houver bloqueio ativo).
  */
+async function segundosRestantesDeBloqueio(
+  chaveEscopo: string
+): Promise<number> {
+  const bloqueadoAte = await lerDataConfig(`${chaveEscopo}_bloqueado_ate`);
+
+  if (!bloqueadoAte) {
+    return 0;
+  }
+
+  const restanteMs = bloqueadoAte.getTime() - Date.now();
+
+  return restanteMs > 0 ? Math.ceil(restanteMs / 1000) : 0;
+}
+
+/**
+ * Registra uma tentativa errada: incrementa o contador de falhas,
+ * calcula (se for o caso) um novo horário de liberação, salva tudo
+ * e devolve os segundos de espera impostos por ESTA tentativa (0 se
+ * ainda não passou do limite de tentativas livres).
+ */
+async function registrarTentativaErrada(
+  chaveEscopo: string
+): Promise<number> {
+  const falhasAnteriores = await lerNumeroConfig(
+    `${chaveEscopo}_tentativas_falhas`
+  );
+
+  const totalFalhas = falhasAnteriores + 1;
+
+  await salvarConfig(
+    `${chaveEscopo}_tentativas_falhas`,
+    String(totalFalhas)
+  );
+
+  const esperaSegundos = calcularEsperaSegundos(totalFalhas);
+
+  if (esperaSegundos > 0) {
+    const bloqueadoAte = new Date(Date.now() + esperaSegundos * 1000);
+
+    await salvarConfig(
+      `${chaveEscopo}_bloqueado_ate`,
+      bloqueadoAte.toISOString()
+    );
+  }
+
+  return esperaSegundos;
+}
+
+async function limparTentativas(chaveEscopo: string): Promise<void> {
+  await salvarConfig(`${chaveEscopo}_tentativas_falhas`, '0');
+  await salvarConfig(`${chaveEscopo}_bloqueado_ate`, '');
+}
+
+function horarioLegivel(data: Date): string {
+  return data.toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
 export function useSessao(bancoPronto: boolean, erroBanco: string | null) {
   const [tela, setTela] = useState<Tela>('login');
   const [telaLogin, setTelaLogin] = useState<TelaLogin>('escolha');
@@ -44,18 +159,9 @@ export function useSessao(bancoPronto: boolean, erroBanco: string | null) {
     return true;
   }
 
-  // ============================================================
+  // ==========================================================
   // LOGIN ADMINISTRADOR LOCAL
-  // ============================================================
-  //
-  // As credenciais do admin ficam salvas na tabela
-  // configuracao_local (chaves "admin_usuario" e "admin_senha").
-  // Na primeira execução, se ainda não existirem, são criadas com
-  // o padrão admin/admin. A partir daí o login sempre valida
-  // contra o que está no banco, o que permite trocar a senha na
-  // tela "Trocar senha" e ter essa alteração preservada pelo
-  // backup/restauração local.
-  // ============================================================
+  // ==========================================================
 
   async function loginAdmin() {
     if (!bancoPronto) {
@@ -71,12 +177,25 @@ export function useSessao(bancoPronto: boolean, erroBanco: string | null) {
       return;
     }
 
+    const chaveEscopo = 'admin';
+
+    const restante = await segundosRestantesDeBloqueio(chaveEscopo);
+
+    if (restante > 0) {
+      Alert.alert(
+        'Aguarde para tentar novamente',
+        `Muitas tentativas erradas. Tente novamente em ${formatarEspera(
+          restante
+        )}.`
+      );
+      return;
+    }
+
     try {
       setCarregando(true);
 
       const db = await obterBanco();
 
-      // Garante a tabela
       await db.runAsync(`
         CREATE TABLE IF NOT EXISTS configuracao_local (
           chave TEXT PRIMARY KEY,
@@ -88,50 +207,69 @@ export function useSessao(bancoPronto: boolean, erroBanco: string | null) {
       let usuarioSalvo = await obterConfig('admin_usuario');
       let senhaSalva = await obterConfig('admin_senha');
 
-      // Primeira vez: cria as credenciais padrão
       if (!usuarioSalvo || !senhaSalva) {
         usuarioSalvo = 'admin';
         senhaSalva = 'admin';
 
         await salvarConfig('admin_usuario', usuarioSalvo);
         await salvarConfig('admin_senha', senhaSalva);
-
-        console.log('Credenciais administrativas padrão criadas.');
       }
+
+      const agora = new Date();
 
       if (usuarioDigitado !== usuarioSalvo || senhaDigitada !== senhaSalva) {
-        Alert.alert('Acesso negado', 'Usuário ou senha inválidos.');
+        const esperaImposta = await registrarTentativaErrada(chaveEscopo);
+
+        await registrarLog(
+          'login_falhou',
+          usuarioDigitado,
+          `Tentativa de login administrativo incorreta às ${horarioLegivel(
+            agora
+          )}.` +
+            (esperaImposta > 0
+              ? ` Bloqueado por ${formatarEspera(esperaImposta)}.`
+              : '')
+        );
+
+        if (esperaImposta > 0) {
+          Alert.alert(
+            'Acesso negado',
+            `Usuário ou senha inválidos. Por segurança, novas tentativas ` +
+              `só serão liberadas em ${formatarEspera(esperaImposta)}.`
+          );
+        } else {
+          Alert.alert('Acesso negado', 'Usuário ou senha inválidos.');
+        }
+
         return;
       }
+
+      await limparTentativas(chaveEscopo);
 
       await registrarLog(
         'login',
         usuarioSalvo,
-        'Login administrativo realizado.'
+        `Login administrativo realizado com sucesso às ${horarioLegivel(
+          agora
+        )}.`
       );
 
-      // Limpa campos
       setUsuario('');
       setSenha('');
 
-      // Entra diretamente no painel
       setTelaLogin('escolha');
       setTelaAdmin('menu');
       setTela('admin');
-
-      console.log('LOGIN ADMINISTRADOR REALIZADO COM SUCESSO');
     } catch (error: any) {
-      console.error('ERRO NO LOGIN ADMIN:', error);
-
       Alert.alert('Erro', error?.message || 'Erro ao abrir o banco local.');
     } finally {
       setCarregando(false);
     }
   }
 
-  // ============================================================
+  // ==========================================================
   // LOGIN OPERADOR LOCAL
-  // ============================================================
+  // ==========================================================
 
   async function loginCaixa() {
     if (!verificarBancoAntesDeEntrar()) {
@@ -143,6 +281,21 @@ export function useSessao(bancoPronto: boolean, erroBanco: string | null) {
 
     if (!usuarioDigitado || !senhaDigitada) {
       Alert.alert('Atenção', 'Informe usuário e senha.');
+      return;
+    }
+
+    // Escopo por operador: um operador bloqueado não afeta os outros.
+    const chaveEscopo = `caixa_${usuarioDigitado.toLowerCase()}`;
+
+    const restante = await segundosRestantesDeBloqueio(chaveEscopo);
+
+    if (restante > 0) {
+      Alert.alert(
+        'Aguarde para tentar novamente',
+        `Muitas tentativas erradas. Tente novamente em ${formatarEspera(
+          restante
+        )}.`
+      );
       return;
     }
 
@@ -173,41 +326,48 @@ export function useSessao(bancoPronto: boolean, erroBanco: string | null) {
         usuarioDigitado
       );
 
-      if (!operadorEncontrado) {
-        Alert.alert('Acesso negado', 'Operador não encontrado ou inativo.');
+      const agora = new Date();
+
+      const senhaArmazenada = operadorEncontrado?.senha_hash || '';
+      const senhaCorreta =
+        !!operadorEncontrado && senhaArmazenada === senhaDigitada;
+
+      if (!operadorEncontrado || !senhaCorreta) {
+        const esperaImposta = await registrarTentativaErrada(chaveEscopo);
+
+        await registrarLog(
+          'login_falhou',
+          usuarioDigitado,
+          `Tentativa de login de operador incorreta às ${horarioLegivel(
+            agora
+          )}.` +
+            (esperaImposta > 0
+              ? ` Bloqueado por ${formatarEspera(esperaImposta)}.`
+              : '')
+        );
+
+        if (esperaImposta > 0) {
+          Alert.alert(
+            'Acesso negado',
+            `Usuário ou senha inválidos. Por segurança, novas tentativas ` +
+              `só serão liberadas em ${formatarEspera(esperaImposta)}.`
+          );
+        } else if (!operadorEncontrado) {
+          Alert.alert('Acesso negado', 'Operador não encontrado ou inativo.');
+        } else {
+          Alert.alert('Acesso negado', 'Usuário ou senha inválidos.');
+        }
+
         return;
       }
 
-      /*
-       * Nesta primeira versão local,
-       * comparamos a senha armazenada.
-       *
-       * Se a senha estiver vazia, o operador
-       * também não poderá entrar.
-       */
-
-      const senhaArmazenada = operadorEncontrado.senha_hash || '';
-
-      if (senhaArmazenada !== senhaDigitada) {
-        Alert.alert('Acesso negado', 'Usuário ou senha inválidos.');
-        return;
-      }
+      await limparTentativas(chaveEscopo);
 
       const operadorLogado: Operador = {
         id: Number(operadorEncontrado.id),
         nome: operadorEncontrado.nome,
         usuario: operadorEncontrado.usuario || undefined,
       };
-
-      // ========================================================
-      // ABRIR CAIXA LOCAL
-      //
-      // OBS: a tabela caixas_local usa a coluna "status"
-      // ('aberto' | 'fechado'), e NÃO possui as colunas
-      // "operador_nome", "total" ou "fechado". Essas colunas
-      // não existem no schema (ver database/banco.ts), então
-      // a query e o INSERT abaixo usam somente colunas reais.
-      // ========================================================
 
       const caixaExistente = await db.getFirstAsync<{
         id: number;
@@ -234,17 +394,13 @@ export function useSessao(bancoPronto: boolean, erroBanco: string | null) {
 
       let caixaId: number;
       let saldoInicial = 0;
-
-      // O total do caixa não é armazenado em caixas_local;
-      // ele é sempre calculado a partir de vendas_local
-      // (ver Caixa.tsx -> carregarResumoCaixa).
       const total = 0;
 
       if (caixaExistente) {
         caixaId = Number(caixaExistente.id);
         saldoInicial = Number(caixaExistente.saldo_inicial || 0);
       } else {
-        const agora = new Date().toISOString();
+        const agoraIso = agora.toISOString();
 
         const resultado = await db.runAsync(
           `
@@ -259,16 +415,12 @@ export function useSessao(bancoPronto: boolean, erroBanco: string | null) {
           `,
           operadorLogado.id,
           0,
-          agora,
+          agoraIso,
           0
         );
 
         caixaId = Number(resultado.lastInsertRowId);
       }
-
-      // ========================================================
-      // ENTIDADE DO CAIXA
-      // ========================================================
 
       setOperador(operadorLogado);
 
@@ -285,7 +437,9 @@ export function useSessao(bancoPronto: boolean, erroBanco: string | null) {
       await registrarLog(
         'login',
         operadorLogado.nome,
-        `Login do operador e abertura/retomada do caixa (id ${caixaId}).`
+        `Login do operador realizado com sucesso às ${horarioLegivel(
+          agora
+        )} (caixa id ${caixaId}).`
       );
 
       setOperadorUsuario('');
@@ -294,8 +448,6 @@ export function useSessao(bancoPronto: boolean, erroBanco: string | null) {
       setTelaLogin('escolha');
       setTela('caixa');
     } catch (error: any) {
-      console.error('Erro no login do caixa local:', error);
-
       setOperador(null);
       setCaixa(null);
 
@@ -308,9 +460,9 @@ export function useSessao(bancoPronto: boolean, erroBanco: string | null) {
     }
   }
 
-  // ============================================================
+  // ==========================================================
   // SAIR
-  // ============================================================
+  // ==========================================================
 
   function sair() {
     const usuarioSaindo = tela === 'caixa' && operador ? operador.nome : 'admin';
@@ -318,9 +470,9 @@ export function useSessao(bancoPronto: boolean, erroBanco: string | null) {
     registrarLog(
       'logout',
       usuarioSaindo,
-      tela === 'caixa'
-        ? 'Operador saiu do caixa.'
-        : 'Administrador saiu do painel.'
+      `${
+        tela === 'caixa' ? 'Operador saiu do caixa' : 'Administrador saiu do painel'
+      } às ${horarioLegivel(new Date())}.`
     );
 
     setOperador(null);
