@@ -36,6 +36,7 @@ interface TelaLoginProps {
 
   carregando: boolean;
   loginAdmin: () => void;
+  loginAdminComBiometria: () => void;
   loginCaixa: () => void;
 
   mostrarBoasVindas: boolean;
@@ -60,6 +61,7 @@ export function TelaLogin({
   setOperadorSenha,
   carregando,
   loginAdmin,
+  loginAdminComBiometria,
   loginCaixa,
   mostrarBoasVindas,
   setMostrarBoasVindas,
@@ -261,12 +263,77 @@ export function TelaLogin({
                 </Text>
               )}
             </TouchableOpacity>
+
+            {/* Alternativa à senha, só na tela de Administrador. */}
+            {isAdmin && (
+              <>
+                <View style={biometriaEstilos.separadorLinha}>
+                  <View style={biometriaEstilos.linha} />
+                  <Text style={biometriaEstilos.separadorTexto}>ou</Text>
+                  <View style={biometriaEstilos.linha} />
+                </View>
+
+                <TouchableOpacity
+                  style={biometriaEstilos.botaoBiometria}
+                  onPress={loginAdminComBiometria}
+                  disabled={carregando}
+                >
+                  <Text style={biometriaEstilos.botaoBiometriaIcone}>🔒</Text>
+                  <Text style={biometriaEstilos.botaoBiometriaTexto}>
+                    Entrar com biometria
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
+
+// ----------------------------------------------------------
+// ESTILOS DO BOTÃO DE BIOMETRIA (locais)
+// ----------------------------------------------------------
+
+const biometriaEstilos = StyleSheet.create({
+  separadorLinha: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 18,
+    marginBottom: 14,
+  },
+  linha: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#e5e7eb',
+  },
+  separadorTexto: {
+    marginHorizontal: 10,
+    fontSize: 12,
+    color: '#9ca3af',
+    fontWeight: '700',
+  },
+  botaoBiometria: {
+    height: 50,
+    borderRadius: 10,
+    borderWidth: 1.5,
+    borderColor: '#2563eb',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#eff6ff',
+  },
+  botaoBiometriaIcone: {
+    fontSize: 18,
+    marginRight: 8,
+  },
+  botaoBiometriaTexto: {
+    color: '#2563eb',
+    fontWeight: '800',
+    fontSize: 15,
+  },
+});
 
 // ----------------------------------------------------------
 // ESTILOS DO MENU DE CARDS (locais, não dependem de Estilos.ts)

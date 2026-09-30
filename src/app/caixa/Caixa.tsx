@@ -4,9 +4,9 @@ import {
     ActivityIndicator,
     Alert,
     Animated,
+    Keyboard,
     KeyboardAvoidingView,
     Modal,
-    Platform,
     ScrollView,
     StyleSheet,
     Text,
@@ -124,8 +124,26 @@ export default function Caixa({
   const [flashProduto, setFlashProduto] = useState(false);
   const flashAnim = useRef(new Animated.Value(0)).current;
 
+  const [tecladoAltura, setTecladoAltura] = useState(0);
+
   useEffect(() => {
     carregarProdutos();
+  }, []);
+
+  // Altura do teclado: usada no modo deitado para dar espaço extra no
+  // final das listas e permitir rolar até o último item com o teclado aberto.
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', (e) =>
+      setTecladoAltura(e.endCoordinates.height)
+    );
+    const hide = Keyboard.addListener('keyboardDidHide', () =>
+      setTecladoAltura(0)
+    );
+
+    return () => {
+      show.remove();
+      hide.remove();
+    };
   }, []);
 
   function mostrarToast(mensagem: string) {
@@ -807,11 +825,226 @@ export default function Caixa({
     setCupom(false);
   }
 
+  // ============================================================
+  // BLOCOS REUTILIZÁVEIS (total e pagamento)
+  // Em pé: ficam dentro da coluna do carrinho.
+  // Deitado: ficam numa barra fixa embaixo, lado a lado.
+  // ============================================================
+
+  const blocoTotal = (
+    <View style={[styles.resumo, isLadoALado && styles.resumoLadoALado]}>
+      <View style={styles.linhaResumo}>
+        <Text style={styles.labelResumo}>Subtotal</Text>
+
+        <Text style={styles.valorResumo}>{fmt(total)}</Text>
+      </View>
+
+      <View style={styles.linhaTotal}>
+        <Text style={styles.labelTotal}>TOTAL</Text>
+
+        <Text style={styles.valorTotal}>{fmt(total)}</Text>
+      </View>
+    </View>
+  );
+
+  const blocoPagamento = (
+    <View
+      style={[
+        styles.areaPagamento,
+        isLadoALado && styles.areaPagamentoLadoALado,
+      ]}
+    >
+      {!isLadoALado && (
+        <Text style={styles.tituloPagamento}>
+          Forma de pagamento
+        </Text>
+      )}
+
+      <View style={styles.opcoesPagamento}>
+        <TouchableOpacity
+          style={[
+            styles.botaoPagamento,
+            pagamento === 'dinheiro' &&
+              styles.pagamentoSelecionado,
+          ]}
+          onPress={() => setPagamento('dinheiro')}
+        >
+          <Text
+            style={[
+              styles.pagamentoTexto,
+              pagamento === 'dinheiro' &&
+                styles.pagamentoTextoSelecionado,
+            ]}
+          >
+            💵 Dinheiro
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.botaoPagamento,
+            pagamento === 'pix' &&
+              styles.pagamentoSelecionado,
+          ]}
+          onPress={() => setPagamento('pix')}
+        >
+          <Text
+            style={[
+              styles.pagamentoTexto,
+              pagamento === 'pix' &&
+                styles.pagamentoTextoSelecionado,
+            ]}
+          >
+            📱 PIX
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.botaoPagamento,
+            pagamento === 'outros' &&
+              styles.pagamentoSelecionado,
+          ]}
+          onPress={() => setPagamento('outros')}
+        >
+          <Text
+            style={[
+              styles.pagamentoTexto,
+              pagamento === 'outros' &&
+                styles.pagamentoTextoSelecionado,
+            ]}
+          >
+            💳 Outros
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={isLadoALado ? styles.linhaAcaoLadoALado : undefined}>
+        {pagamento === 'dinheiro' && (
+          <>
+            <View style={isLadoALado ? { flex: 1 } : undefined}>
+              <Text style={styles.labelCampo}>Valor recebido</Text>
+
+              <TextInput
+                style={styles.inputValor}
+                value={valorPago}
+                onChangeText={setValorPago}
+                keyboardType="decimal-pad"
+                placeholder="0,00"
+                placeholderTextColor="#999"
+              />
+
+              {numero(valorPago) > 0 &&
+                numero(valorPago) < total && (
+                  <Text
+                    style={{
+                      color: '#dc2626',
+                      fontSize: 12,
+                      fontWeight: '700',
+                      marginTop: 5,
+                    }}
+                  >
+                    ⚠️ {isLadoALado
+                      ? 'Falta '
+                      : 'O valor recebido é menor que o total (Falta '}
+                    {fmt(total - numero(valorPago))}
+                    {isLadoALado ? '' : ')'}
+                  </Text>
+                )}
+            </View>
+
+            <View
+              style={[
+                styles.areaTroco,
+                isLadoALado && styles.areaTrocoLadoALado,
+              ]}
+            >
+              <Text style={styles.labelTroco}>Troco</Text>
+
+              <Text style={styles.valorTroco}>{fmt(troco)}</Text>
+            </View>
+
+            <TouchableOpacity
+              style={[
+                styles.botaoFinalizar,
+                isLadoALado && styles.botaoFinalizarFixo,
+                (finalizando ||
+                  !carrinho.length ||
+                  numero(valorPago) < total) &&
+                  styles.botaoDesabilitado,
+              ]}
+              disabled={
+                finalizando ||
+                !carrinho.length ||
+                numero(valorPago) < total
+              }
+              onPress={() => finalizarVendaLocal('dinheiro')}
+            >
+              {finalizando ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.botaoFinalizarTexto}>
+                  Finalizar venda
+                </Text>
+              )}
+            </TouchableOpacity>
+          </>
+        )}
+
+        {pagamento === 'pix' && (
+          <TouchableOpacity
+            style={[
+              styles.botaoFinalizar,
+              isLadoALado && styles.botaoFinalizarLargo,
+              (pix.pixCarregando ||
+                finalizando ||
+                !carrinho.length) &&
+                styles.botaoDesabilitado,
+            ]}
+            disabled={
+              pix.pixCarregando || finalizando || !carrinho.length
+            }
+            onPress={pix.gerarPix}
+          >
+            {pix.pixCarregando ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.botaoFinalizarTexto}>
+                Gerar PIX
+              </Text>
+            )}
+          </TouchableOpacity>
+        )}
+
+        {pagamento === 'outros' && (
+          <TouchableOpacity
+            style={[
+              styles.botaoFinalizar,
+              isLadoALado && styles.botaoFinalizarLargo,
+              (finalizando || !carrinho.length) &&
+                styles.botaoDesabilitado,
+            ]}
+            disabled={finalizando || !carrinho.length}
+            onPress={() => finalizarVendaLocal('outros')}
+          >
+            {finalizando ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.botaoFinalizarTexto}>
+                Finalizar venda
+              </Text>
+            )}
+          </TouchableOpacity>
+        )}
+      </View>
+    </View>
+  );
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
+      enabled={!isLadoALado}
+      behavior="height"
     >
       <View style={styles.header}>
         <View>
@@ -869,391 +1102,236 @@ export default function Caixa({
         </Animated.View>
       )}
 
-      <View
-        style={[
-          styles.conteudo,
-          isLadoALado && styles.conteudoLadoALado,
-        ]}
-      >
-        {busca.trim() !== '' && (
-          <View
-            style={[
-              styles.areaProdutos,
-              isLadoALado && styles.areaProdutosLadoALado,
-            ]}
-          >
-            <View style={styles.tituloSecao}>
-              <Text style={styles.tituloSecaoTexto}>
-                Produtos encontrados
-              </Text>
-
-              <Text style={styles.contadorProdutos}>
-                {produtosFiltrados.length}
-              </Text>
-            </View>
-
-            {carregandoProdutos ? (
-              <View style={styles.carregando}>
-                <ActivityIndicator size="large" color="#2563eb" />
-
-                <Text style={styles.carregandoTexto}>
-                  Carregando produtos...
-                </Text>
-              </View>
-            ) : (
-              <ScrollView
-                style={[
-                  styles.listaProdutos,
-                  isLadoALado && styles.listaProdutosLadoALado,
-                ]}
-                keyboardShouldPersistTaps="handled"
-                showsVerticalScrollIndicator={true}
-              >
-                {produtosFiltrados.map((produto) => {
-                  const estoque = numero(produto.quantidade);
-
-                  return (
-                    <View key={produto.id} style={styles.cardProduto}>
-                      <View style={styles.infoProduto}>
-                        <Text
-                          style={styles.nomeProduto}
-                          numberOfLines={2}
-                        >
-                          {produto.nome}
-                        </Text>
-
-                        {!!produto.marca && (
-                          <Text style={styles.marcaProduto}>
-                            {produto.marca}
-                          </Text>
-                        )}
-
-                        <Text style={styles.codigoProduto}>
-                          Cód.: {produto.codigo || '-'}
-                          {produto.ean ? ` • EAN: ${produto.ean}` : ''}
-                        </Text>
-
-                        <Text style={styles.estoqueProduto}>
-                          Estoque: {fmt3(estoque)}{' '}
-                          {produto.unidade || 'UN'}
-                        </Text>
-                      </View>
-
-                      <View style={styles.ladoProduto}>
-                        <Text style={styles.precoProduto}>
-                          {fmt(produto.precoVenda)}
-                        </Text>
-
-                        <TouchableOpacity
-                          style={[
-                            styles.botaoAdicionar,
-                            estoque <= 0 && styles.botaoDesabilitado,
-                          ]}
-                          disabled={estoque <= 0}
-                          onPress={() => adicionarProduto(produto)}
-                        >
-                          <Text style={styles.botaoAdicionarTexto}>
-                            {estoque <= 0
-                              ? 'Sem estoque'
-                              : 'Adicionar'}
-                          </Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                  );
-                })}
-
-                {!produtosFiltrados.length && !carregandoProdutos && (
-                  <View style={styles.vazioProdutos}>
-                    <Text style={styles.vazioProdutosTitulo}>
-                      Nenhum produto encontrado
-                    </Text>
-
-                    <Text style={styles.vazioProdutosTexto}>
-                      Digite outro código, EAN ou nome.
-                    </Text>
-                  </View>
-                )}
-              </ScrollView>
-            )}
-          </View>
-        )}
-
+      <View style={styles.conteudo}>
         <View
           style={[
-            styles.areaCarrinho,
-            isLadoALado && styles.areaCarrinhoLadoALado,
+            styles.conteudoPrincipal,
+            isLadoALado && styles.conteudoLadoALado,
           ]}
         >
-          <View style={styles.cabecalhoCarrinho}>
-            <View>
-              <Text style={styles.tituloCarrinho}>Carrinho</Text>
-
-              <Text style={styles.quantidadeCarrinho}>
-                {quantidadeItens}{' '}
-                {quantidadeItens === 1 ? 'item' : 'itens'}
-              </Text>
-            </View>
-
-            {carrinho.length > 0 && (
-              <TouchableOpacity onPress={() => setCarrinho([])}>
-                <Text style={styles.limparTexto}>Limpar</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          <ScrollView
-            style={styles.listaCarrinho}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-            {carrinho.map((item) => (
-              <View key={item.produtoId} style={styles.cardCarrinho}>
-                <View style={styles.infoCarrinho}>
-                  <Text style={styles.nomeCarrinho} numberOfLines={2}>
-                    {item.nome}
-                  </Text>
-
-                  <Text style={styles.precoUnitario}>
-                    {fmt(item.preco)} / {item.unidade}
-                  </Text>
-
-                  <Text style={styles.subtotal}>
-                    {fmt(item.preco * item.quantidade)}
-                  </Text>
-                </View>
-
-                <View style={styles.controlesQuantidade}>
-                  <TouchableOpacity
-                    style={styles.botaoQuantidade}
-                    onPress={() => diminuirQuantidade(item)}
-                  >
-                    <Text style={styles.botaoQuantidadeTexto}>
-                      −
-                    </Text>
-                  </TouchableOpacity>
-
-                  <Text style={styles.quantidadeTexto}>
-                    {fmt3(item.quantidade)}
-                  </Text>
-
-                  <TouchableOpacity
-                    style={styles.botaoQuantidade}
-                    onPress={() => aumentarQuantidade(item)}
-                  >
-                    <Text style={styles.botaoQuantidadeTexto}>
-                      +
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-
-                <TouchableOpacity
-                  style={styles.botaoExcluir}
-                  onPress={() => removerItem(item)}
-                >
-                  <Text style={styles.botaoExcluirTexto}>🗑</Text>
-                </TouchableOpacity>
-              </View>
-            ))}
-
-            {!carrinho.length && (
-              <View style={styles.carrinhoVazio}>
-                <Text style={styles.carrinhoVazioIcone}>🛒</Text>
-
-                <Text style={styles.carrinhoVazioTitulo}>
-                  Carrinho vazio
+          {busca.trim() !== '' && (
+            <View
+              style={[
+                styles.areaProdutos,
+                isLadoALado && styles.areaProdutosLadoALado,
+              ]}
+            >
+              <View style={styles.tituloSecao}>
+                <Text style={styles.tituloSecaoTexto}>
+                  Produtos encontrados
                 </Text>
 
-                <Text style={styles.carrinhoVazioTexto}>
-                  Adicione produtos para iniciar uma venda.
+                <Text style={styles.contadorProdutos}>
+                  {produtosFiltrados.length}
                 </Text>
               </View>
-            )}
-          </ScrollView>
 
-          <View style={styles.resumo}>
-            <View style={styles.linhaResumo}>
-              <Text style={styles.labelResumo}>Subtotal</Text>
+              {carregandoProdutos ? (
+                <View style={styles.carregando}>
+                  <ActivityIndicator size="large" color="#2563eb" />
 
-              <Text style={styles.valorResumo}>{fmt(total)}</Text>
-            </View>
-
-            <View style={styles.linhaTotal}>
-              <Text style={styles.labelTotal}>TOTAL</Text>
-
-              <Text style={styles.valorTotal}>{fmt(total)}</Text>
-            </View>
-          </View>
-
-          <View style={styles.areaPagamento}>
-            <Text style={styles.tituloPagamento}>
-              Forma de pagamento
-            </Text>
-
-            <View style={styles.opcoesPagamento}>
-              <TouchableOpacity
-                style={[
-                  styles.botaoPagamento,
-                  pagamento === 'dinheiro' &&
-                    styles.pagamentoSelecionado,
-                ]}
-                onPress={() => setPagamento('dinheiro')}
-              >
-                <Text
-                  style={[
-                    styles.pagamentoTexto,
-                    pagamento === 'dinheiro' &&
-                      styles.pagamentoTextoSelecionado,
-                  ]}
-                >
-                  💵 Dinheiro
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.botaoPagamento,
-                  pagamento === 'pix' &&
-                    styles.pagamentoSelecionado,
-                ]}
-                onPress={() => setPagamento('pix')}
-              >
-                <Text
-                  style={[
-                    styles.pagamentoTexto,
-                    pagamento === 'pix' &&
-                      styles.pagamentoTextoSelecionado,
-                  ]}
-                >
-                  📱 PIX
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.botaoPagamento,
-                  pagamento === 'outros' &&
-                    styles.pagamentoSelecionado,
-                ]}
-                onPress={() => setPagamento('outros')}
-              >
-                <Text
-                  style={[
-                    styles.pagamentoTexto,
-                    pagamento === 'outros' &&
-                      styles.pagamentoTextoSelecionado,
-                  ]}
-                >
-                  💳 Outros
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {pagamento === 'dinheiro' && (
-              <View>
-                <Text style={styles.labelCampo}>Valor recebido</Text>
-
-                <TextInput
-                  style={styles.inputValor}
-                  value={valorPago}
-                  onChangeText={setValorPago}
-                  keyboardType="decimal-pad"
-                  placeholder="0,00"
-                  placeholderTextColor="#999"
-                />
-
-                {numero(valorPago) > 0 &&
-                  numero(valorPago) < total && (
-                    <Text
-                      style={{
-                        color: '#dc2626',
-                        fontSize: 12,
-                        fontWeight: '700',
-                        marginTop: 5,
-                      }}
-                    >
-                      ⚠️ O valor recebido é menor que o total
-                      (Falta {fmt(total - numero(valorPago))})
-                    </Text>
-                  )}
-
-                <View style={styles.areaTroco}>
-                  <Text style={styles.labelTroco}>Troco</Text>
-
-                  <Text style={styles.valorTroco}>{fmt(troco)}</Text>
+                  <Text style={styles.carregandoTexto}>
+                    Carregando produtos...
+                  </Text>
                 </View>
-
-                <TouchableOpacity
+              ) : (
+                <ScrollView
                   style={[
-                    styles.botaoFinalizar,
-                    (finalizando ||
-                      !carrinho.length ||
-                      numero(valorPago) < total) &&
-                      styles.botaoDesabilitado,
+                    styles.listaProdutos,
+                    isLadoALado && styles.listaProdutosLadoALado,
                   ]}
-                  disabled={
-                    finalizando ||
-                    !carrinho.length ||
-                    numero(valorPago) < total
+                  contentContainerStyle={
+                    isLadoALado
+                      ? { paddingBottom: tecladoAltura }
+                      : undefined
                   }
-                  onPress={() => finalizarVendaLocal('dinheiro')}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={true}
                 >
-                  {finalizando ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={styles.botaoFinalizarTexto}>
-                      Finalizar venda
-                    </Text>
+                  {produtosFiltrados.map((produto) => {
+                    const estoque = numero(produto.quantidade);
+
+                    return (
+                      <View key={produto.id} style={styles.cardProduto}>
+                        <View style={styles.infoProduto}>
+                          <Text
+                            style={styles.nomeProduto}
+                            numberOfLines={2}
+                          >
+                            {produto.nome}
+                          </Text>
+
+                          {!!produto.marca && (
+                            <Text style={styles.marcaProduto}>
+                              {produto.marca}
+                            </Text>
+                          )}
+
+                          <Text style={styles.codigoProduto}>
+                            Cód.: {produto.codigo || '-'}
+                            {produto.ean ? ` • EAN: ${produto.ean}` : ''}
+                          </Text>
+
+                          <Text style={styles.estoqueProduto}>
+                            Estoque: {fmt3(estoque)}{' '}
+                            {produto.unidade || 'UN'}
+                          </Text>
+                        </View>
+
+                        <View style={styles.ladoProduto}>
+                          <Text style={styles.precoProduto}>
+                            {fmt(produto.precoVenda)}
+                          </Text>
+
+                          <TouchableOpacity
+                            style={[
+                              styles.botaoAdicionar,
+                              estoque <= 0 && styles.botaoDesabilitado,
+                            ]}
+                            disabled={estoque <= 0}
+                            onPress={() => adicionarProduto(produto)}
+                          >
+                            <Text style={styles.botaoAdicionarTexto}>
+                              {estoque <= 0
+                                ? 'Sem estoque'
+                                : 'Adicionar'}
+                            </Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    );
+                  })}
+
+                  {!produtosFiltrados.length && !carregandoProdutos && (
+                    <View style={styles.vazioProdutos}>
+                      <Text style={styles.vazioProdutosTitulo}>
+                        Nenhum produto encontrado
+                      </Text>
+
+                      <Text style={styles.vazioProdutosTexto}>
+                        Digite outro código, EAN ou nome.
+                      </Text>
+                    </View>
                   )}
-                </TouchableOpacity>
+                </ScrollView>
+              )}
+            </View>
+          )}
+
+          <View
+            style={[
+              styles.areaCarrinho,
+              isLadoALado && styles.areaCarrinhoLadoALado,
+            ]}
+          >
+            <View style={styles.cabecalhoCarrinho}>
+              <View>
+                <Text style={styles.tituloCarrinho}>Carrinho</Text>
+
+                <Text style={styles.quantidadeCarrinho}>
+                  {quantidadeItens}{' '}
+                  {quantidadeItens === 1 ? 'item' : 'itens'}
+                </Text>
               </View>
-            )}
 
-            {pagamento === 'pix' && (
-              <TouchableOpacity
-                style={[
-                  styles.botaoFinalizar,
-                  (pix.pixCarregando ||
-                    finalizando ||
-                    !carrinho.length) &&
-                    styles.botaoDesabilitado,
-                ]}
-                disabled={
-                  pix.pixCarregando || finalizando || !carrinho.length
-                }
-                onPress={pix.gerarPix}
-              >
-                {pix.pixCarregando ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.botaoFinalizarTexto}>
-                    Gerar PIX
-                  </Text>
-                )}
-              </TouchableOpacity>
-            )}
+              {carrinho.length > 0 && (
+                <TouchableOpacity onPress={() => setCarrinho([])}>
+                  <Text style={styles.limparTexto}>Limpar</Text>
+                </TouchableOpacity>
+              )}
+            </View>
 
-            {pagamento === 'outros' && (
-              <TouchableOpacity
-                style={[
-                  styles.botaoFinalizar,
-                  (finalizando || !carrinho.length) &&
-                    styles.botaoDesabilitado,
-                ]}
-                disabled={finalizando || !carrinho.length}
-                onPress={() => finalizarVendaLocal('outros')}
-              >
-                {finalizando ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Text style={styles.botaoFinalizarTexto}>
-                    Finalizar venda
+            <ScrollView
+              style={styles.listaCarrinho}
+              contentContainerStyle={
+                isLadoALado
+                  ? { paddingBottom: tecladoAltura }
+                  : undefined
+              }
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {carrinho.map((item) => (
+                <View key={item.produtoId} style={styles.cardCarrinho}>
+                  <View style={styles.infoCarrinho}>
+                    <Text style={styles.nomeCarrinho} numberOfLines={2}>
+                      {item.nome}
+                    </Text>
+
+                    <Text style={styles.precoUnitario}>
+                      {fmt(item.preco)} / {item.unidade}
+                    </Text>
+
+                    <Text style={styles.subtotal}>
+                      {fmt(item.preco * item.quantidade)}
+                    </Text>
+                  </View>
+
+                  <View style={styles.controlesQuantidade}>
+                    <TouchableOpacity
+                      style={styles.botaoQuantidade}
+                      onPress={() => diminuirQuantidade(item)}
+                    >
+                      <Text style={styles.botaoQuantidadeTexto}>
+                        −
+                      </Text>
+                    </TouchableOpacity>
+
+                    <Text style={styles.quantidadeTexto}>
+                      {fmt3(item.quantidade)}
+                    </Text>
+
+                    <TouchableOpacity
+                      style={styles.botaoQuantidade}
+                      onPress={() => aumentarQuantidade(item)}
+                    >
+                      <Text style={styles.botaoQuantidadeTexto}>
+                        +
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <TouchableOpacity
+                    style={styles.botaoExcluir}
+                    onPress={() => removerItem(item)}
+                  >
+                    <Text style={styles.botaoExcluirTexto}>🗑</Text>
+                  </TouchableOpacity>
+                </View>
+              ))}
+
+              {!carrinho.length && (
+                <View style={styles.carrinhoVazio}>
+                  <Text style={styles.carrinhoVazioIcone}>🛒</Text>
+
+                  <Text style={styles.carrinhoVazioTitulo}>
+                    Carrinho vazio
                   </Text>
-                )}
-              </TouchableOpacity>
+
+                  <Text style={styles.carrinhoVazioTexto}>
+                    Adicione produtos para iniciar uma venda.
+                  </Text>
+                </View>
+              )}
+            </ScrollView>
+
+            {/* Em pé: total e pagamento dentro do carrinho */}
+            {!isLadoALado && (
+              <>
+                {blocoTotal}
+                {blocoPagamento}
+              </>
             )}
           </View>
         </View>
+
+        {/* Deitado: barra fixa embaixo, total e pagamento lado a lado */}
+        {isLadoALado && (
+          <View style={styles.barraInferior}>
+            {blocoTotal}
+            {blocoPagamento}
+          </View>
+        )}
       </View>
 
       {/* CAMERA */}
@@ -1684,8 +1762,21 @@ const styles = StyleSheet.create({
     flex: 1,
   },
 
+  conteudoPrincipal: {
+    flex: 1,
+    minHeight: 0,
+  },
+
   conteudoLadoALado: {
     flexDirection: 'row',
+  },
+
+  barraInferior: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#d1d5db',
   },
 
   areaProdutos: {
@@ -1846,7 +1937,7 @@ const styles = StyleSheet.create({
 
   areaCarrinhoLadoALado: {
     borderTopWidth: 0,
-    maxWidth: 480,
+    flex: 1,
   },
 
   cabecalhoCarrinho: {
@@ -1980,6 +2071,14 @@ const styles = StyleSheet.create({
     paddingTop: 9,
   },
 
+  resumoLadoALado: {
+    width: 240,
+    justifyContent: 'center',
+    paddingBottom: 9,
+    borderRightWidth: 1,
+    borderRightColor: '#e5e7eb',
+  },
+
   linhaResumo: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -2022,6 +2121,11 @@ const styles = StyleSheet.create({
     padding: 15,
   },
 
+  areaPagamentoLadoALado: {
+    flex: 1,
+    paddingVertical: 10,
+  },
+
   tituloPagamento: {
     fontSize: 13,
     fontWeight: '700',
@@ -2058,6 +2162,12 @@ const styles = StyleSheet.create({
     color: '#fff',
   },
 
+  linhaAcaoLadoALado: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    gap: 10,
+  },
+
   labelCampo: {
     marginTop: 10,
     marginBottom: 5,
@@ -2084,6 +2194,15 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
 
+  areaTrocoLadoALado: {
+    marginTop: 0,
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minWidth: 100,
+    height: 48,
+  },
+
   labelTroco: {
     fontSize: 13,
     color: '#6b7280',
@@ -2102,6 +2221,16 @@ const styles = StyleSheet.create({
     backgroundColor: '#16a34a',
     justifyContent: 'center',
     alignItems: 'center',
+  },
+
+  botaoFinalizarFixo: {
+    marginTop: 0,
+    width: 170,
+  },
+
+  botaoFinalizarLargo: {
+    marginTop: 10,
+    flex: 1,
   },
 
   botaoFinalizarTexto: {

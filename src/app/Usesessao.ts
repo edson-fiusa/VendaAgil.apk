@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Alert } from 'react-native';
+import * as LocalAuthentication from 'expo-local-authentication';
 
 import { obterBanco } from '../../src/database/banco';
 import { registrarLog } from '../../src/app/seguranca/log';
@@ -268,6 +269,90 @@ export function useSessao(bancoPronto: boolean, erroBanco: string | null) {
   }
 
   // ==========================================================
+  // LOGIN ADMINISTRADOR VIA BIOMETRIA (alternativa à senha)
+  // ==========================================================
+  //
+  // Não substitui a senha: é uma segunda forma de entrar, usando a
+  // biometria ou o PIN/padrão já configurados no aparelho. Continua
+  // exigindo que o admin já exista (ou cria o padrão admin/admin na
+  // primeira vez, igual ao login por senha).
+  // ==========================================================
+
+  async function loginAdminComBiometria() {
+    if (!bancoPronto) {
+      Alert.alert('Aguarde', 'O banco local ainda não foi inicializado.');
+      return;
+    }
+
+    try {
+      setCarregando(true);
+
+      const compativel = await LocalAuthentication.hasHardwareAsync();
+      const cadastrada = await LocalAuthentication.isEnrolledAsync();
+
+      if (!compativel || !cadastrada) {
+        Alert.alert(
+          'Biometria indisponível',
+          'Este aparelho não tem biometria ou PIN/padrão configurado. Entre com usuário e senha.'
+        );
+        return;
+      }
+
+      const resultado = await LocalAuthentication.authenticateAsync({
+        promptMessage: 'Entrar no Painel Administrativo',
+        cancelLabel: 'Cancelar',
+        disableDeviceFallback: false,
+      });
+
+      if (!resultado.success) {
+        return;
+      }
+
+      const db = await obterBanco();
+
+      await db.runAsync(`
+        CREATE TABLE IF NOT EXISTS configuracao_local (
+          chave TEXT PRIMARY KEY,
+          valor TEXT,
+          atualizado_em TEXT
+        )
+      `);
+
+      let usuarioSalvo = await obterConfig('admin_usuario');
+
+      if (!usuarioSalvo) {
+        usuarioSalvo = 'admin';
+        await salvarConfig('admin_usuario', usuarioSalvo);
+
+        const senhaSalva = (await obterConfig('admin_senha')) || 'admin';
+        await salvarConfig('admin_senha', senhaSalva);
+      }
+
+      await limparTentativas('admin');
+
+      await registrarLog(
+        'login',
+        usuarioSalvo,
+        `Login administrativo via biometria às ${horarioLegivel(new Date())}.`
+      );
+
+      setUsuario('');
+      setSenha('');
+
+      setTelaLogin('escolha');
+      setTelaAdmin('menu');
+      setTela('admin');
+    } catch (error: any) {
+      Alert.alert(
+        'Erro',
+        error?.message || 'Não foi possível autenticar com biometria.'
+      );
+    } finally {
+      setCarregando(false);
+    }
+  }
+
+  // ==========================================================
   // LOGIN OPERADOR LOCAL
   // ==========================================================
 
@@ -512,6 +597,7 @@ export function useSessao(bancoPronto: boolean, erroBanco: string | null) {
     carregando,
 
     loginAdmin,
+    loginAdminComBiometria,
     loginCaixa,
     sair,
   };

@@ -1,9 +1,7 @@
 import { useEffect, useState } from 'react';
 import { SafeAreaView } from 'react-native-safe-area-context';
-
 import { inicializarBanco } from '../../src/database/banco';
 import { useOrientacaoDispositivo } from '../useOrientacaoDispositivo';
-
 import { estilos } from './Estilos';
 import { useLicencaTeste } from './Uselicencateste';
 import { useSessao } from './Usesessao';
@@ -12,19 +10,8 @@ import { TelaLogin } from './Telalogin';
 import { TelaBloqueioTeste, TelaCarregamentoTeste } from './Telateste';
 import Caixa from './caixa';
 
-// ============================================================
-// COMPONENTE PRINCIPAL
-// ============================================================
-
 export default function Index() {
-  // Hook central: detecta tablet x celular, TRAVA a orientação
-  // (tablet = deitado, celular = em pé) e reage sozinho a
-  // qualquer rotação do aparelho, atualizando o layout.
   const { isPaisagem, isLadoALado: isLargo } = useOrientacaoDispositivo();
-
-  // ============================================================
-  // BANCO LOCAL
-  // ============================================================
 
   const [bancoPronto, setBancoPronto] = useState(false);
   const [erroBanco, setErroBanco] = useState<string | null>(null);
@@ -34,16 +21,12 @@ export default function Index() {
 
     async function prepararBanco() {
       try {
-        console.log('Inicializando banco SQLite local...');
-
         await inicializarBanco();
 
         if (ativo) {
           setBancoPronto(true);
           setErroBanco(null);
         }
-
-        console.log('Banco SQLite local inicializado.');
       } catch (error: any) {
         console.error('Erro ao inicializar banco local:', error);
 
@@ -66,17 +49,9 @@ export default function Index() {
   const licenca = useLicencaTeste(bancoPronto);
   const sessao = useSessao(bancoPronto, erroBanco);
 
-  // ============================================================
-  // TELA DE VERIFICAÇÃO DO PERÍODO DE TESTE
-  // ============================================================
-
   if (licenca.verificandoTeste) {
     return <TelaCarregamentoTeste />;
   }
-
-  // ============================================================
-  // TELA DE BLOQUEIO (TESTE EXPIRADO)
-  // ============================================================
 
   if (licenca.testeExpirado && !licenca.appDesbloqueado) {
     return (
@@ -91,11 +66,7 @@ export default function Index() {
     );
   }
 
-  // ============================================================
-  // LOGIN
-  // ============================================================
-
-    if (sessao.tela === 'login') {
+  if (sessao.tela === 'login') {
     return (
       <TelaLogin
         isPaisagem={isPaisagem}
@@ -123,10 +94,6 @@ export default function Index() {
     );
   }
 
-  // ============================================================
-  // ADMIN
-  // ============================================================
-
   if (sessao.tela === 'admin') {
     return (
       <PainelAdmin
@@ -137,10 +104,6 @@ export default function Index() {
       />
     );
   }
-
-  // ============================================================
-  // CAIXA
-  // ============================================================
 
   if (sessao.tela === 'caixa') {
     return (

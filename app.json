@@ -2,20 +2,19 @@
   "expo": {
     "name": "VendaÁgil",
     "slug": "mobile",
-    "version": "2.1.6",
+    "version": "1.1.6",
     "orientation": "default",
     "icon": "./src/app/img/icon.png",
     "scheme": "vendaagil",
     "userInterfaceStyle": "automatic",
     "updates": {
-  "url": "https://u.expo.dev/c2c0c2f6-576d-4b92-bbdb-e1488e968777",
-  "enabled": true,
-  "checkAutomatically": "ON_LOAD",
-  "fallbackToCacheTimeout": 0
-  },
-  "runtimeVersion": {
-  "policy": "sdkVersion" 
-},
+      "enabled": true,
+      "checkAutomatically": "ON_LOAD",
+      "fallbackToCacheTimeout": 0
+    },
+    "runtimeVersion": {
+      "policy": "sdkVersion"
+    },
     "ios": {
       "icon": "./assets/expo.icon",
       "infoPlist": {
@@ -24,6 +23,7 @@
       }
     },
     "android": {
+      "softwareKeyboardLayoutMode": "pan",
       "permissions": [
         "CAMERA",
         "android.permission.RECORD_AUDIO"
@@ -59,7 +59,6 @@
       ],
       "expo-image",
       "expo-web-browser",
-      "expo-speech-recognition",
       [
         "expo-build-properties",
         {
@@ -80,9 +79,9 @@
     "extra": {
       "router": {},
       "eas": {
-        "projectId": "c2c0c2f6-576d-4b92-bbdb-e1488e968777"
+        "projectId": "09e77e8a-1357-48c1-805d-452c4075fef1"
       }
     },
-    "owner": "edon-silva"
+    "owner": "edson26dev"
   }
 }
